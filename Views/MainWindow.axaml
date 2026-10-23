@@ -1,0 +1,439 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:PowerRenameAvalonia.ViewModels"
+        xmlns:models="using:PowerRenameAvalonia.Models"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="1420" d:DesignHeight="860"
+        x:Class="PowerRenameAvalonia.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="PowerRename (WAV Editor &amp; BMS Sync Mode)"
+        Width="1420" Height="860"
+        MinWidth="1100" MinHeight="620"
+        WindowStartupLocation="CenterScreen"
+        Background="#181818"
+        Foreground="#f3f3f3"
+        DragDrop.AllowDrop="True">
+
+    <Grid ColumnDefinitions="350, *">
+        <!-- 좌측 사이드바: 옵션 및 검색/치환 -->
+        <Border Grid.Column="0"
+                Background="#202020"
+                BorderBrush="#2d2d2d"
+                BorderThickness="0,0,1,0"
+                Padding="16">
+            <Grid RowDefinitions="Auto, Auto, Auto, Auto, Auto, Auto, Auto, *, Auto">
+                <!-- 1. 검색어 입력창 -->
+                <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,12">
+                    <TextBox Text="{Binding SearchText, Mode=TwoWay}"
+                             PlaceholderText="검색어 입력..."
+                             FontSize="14"
+                             Padding="10,8"
+                             Background="#2a2a2a"
+                             BorderBrush="#3a3a3a" />
+
+                    <!-- 옵션 체크박스들 -->
+                    <StackPanel Spacing="4" Margin="2,4,0,0">
+                        <CheckBox IsChecked="{Binding UseRegex}" Content="정규식 사용" FontSize="13" />
+                        <CheckBox IsChecked="{Binding MatchAll}" Content="모든 일치 항목 검색" FontSize="13" />
+                        <CheckBox IsChecked="{Binding MatchCase}" Content="대/소문자 구분" FontSize="13" />
+                        <CheckBox IsChecked="{Binding OnlyWavFiles, Mode=TwoWay}"
+                                  Content="🎵 WAV 파일만 대상 (*.wav)"
+                                  Foreground="#a78bfa"
+                                  FontWeight="SemiBold"
+                                  FontSize="13" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- 2. 대체 입력창 -->
+                <StackPanel Grid.Row="1" Spacing="6" Margin="0,0,0,14">
+                    <TextBox Text="{Binding ReplaceText, Mode=TwoWay}"
+                             PlaceholderText="다음으로 대체"
+                             FontSize="14"
+                             Padding="10,8"
+                             Background="#2a2a2a"
+                             BorderBrush="#3a3a3a" />
+                </StackPanel>
+
+                <!-- 3. 적용 대상 (범위 & 타겟) -->
+                <StackPanel Grid.Row="2" Spacing="8" Margin="0,0,0,14">
+                    <TextBlock Text="적용 대상" FontSize="12" Foreground="#999999" />
+                    <Grid ColumnDefinitions="*, Auto">
+                        <ComboBox Grid.Column="0"
+                                  HorizontalAlignment="Stretch"
+                                  SelectedIndex="{Binding SelectedScope, Mode=TwoWay}">
+                            <ComboBoxItem Content="파일 이름 + 확장명" />
+                            <ComboBoxItem Content="파일 이름만" />
+                            <ComboBoxItem Content="확장명만" />
+                        </ComboBox>
+
+                        <!-- 대상 필터 토글 버튼 그룹 -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="6,0,0,0">
+                            <ToggleButton IsChecked="{Binding IncludeFiles}"
+                                          ToolTip.Tip="파일 포함"
+                                          Width="34" Height="32" Padding="0">
+                                <TextBlock Text="📄" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </ToggleButton>
+                            <ToggleButton IsChecked="{Binding IncludeFolders}"
+                                          ToolTip.Tip="폴더 자체 포함 (주의: 폴더명 변경)"
+                                          Width="34" Height="32" Padding="0">
+                                <TextBlock Text="📁" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </ToggleButton>
+                            <ToggleButton IsChecked="{Binding IncludeSubfolders}"
+                                          ToolTip.Tip="하위 폴더 재귀 탐색 (씬 폴더 wav 포함)"
+                                          Width="34" Height="32" Padding="0">
+                                <TextBlock Text="🗂️" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </ToggleButton>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+
+                <!-- 4. 텍스트 서식 지정 -->
+                <StackPanel Grid.Row="3" Spacing="8" Margin="0,0,0,14">
+                    <TextBlock Text="텍스트 서식 지정" FontSize="12" Foreground="#999999" />
+                    <UniformGrid Columns="5" Margin="0,2,0,0">
+                        <Button Content="aa"
+                                Command="{Binding SetFormattingCommand}"
+                                CommandParameter="Lowercase"
+                                ToolTip.Tip="모두 소문자로 (lowercase)"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="2,0" />
+                        <Button Content="AA"
+                                Command="{Binding SetFormattingCommand}"
+                                CommandParameter="Uppercase"
+                                ToolTip.Tip="모두 대문자로 (UPPERCASE)"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="2,0" />
+                        <Button Content="Aa"
+                                Command="{Binding SetFormattingCommand}"
+                                CommandParameter="TitleCase"
+                                ToolTip.Tip="각 단어 첫 글자 대문자 (Title Case)"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="2,0" />
+                        <Button Content="Aa Aa"
+                                Command="{Binding SetFormattingCommand}"
+                                CommandParameter="SentenceCase"
+                                ToolTip.Tip="문장 첫 글자 대문자 (Sentence Case)"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="2,0" />
+                        <Button Content="⟲"
+                                Command="{Binding ClearFormattingCommand}"
+                                ToolTip.Tip="서식 초기화"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="2,0" />
+                    </UniformGrid>
+                </StackPanel>
+
+                <!-- 5. 🎼 BMS 차트 파일 연동 설정 -->
+                <Border Grid.Row="4"
+                        Background="#252131"
+                        BorderBrush="#4c2c77"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="10"
+                        Margin="0,0,0,14">
+                    <StackPanel Spacing="6">
+                        <Grid ColumnDefinitions="*, Auto">
+                            <CheckBox Grid.Column="0"
+                                      IsChecked="{Binding SyncWithBms, Mode=TwoWay}"
+                                      Content="🎼 BMS 차트 동기화"
+                                      Foreground="#d8b4fe"
+                                      FontWeight="SemiBold"
+                                      FontSize="12" />
+                            <Button Grid.Column="1"
+                                    Content="BMS 선택"
+                                    FontSize="10"
+                                    Padding="6,2"
+                                    Background="#3c2858"
+                                    Foreground="#e9d5ff"
+                                    Click="OnSelectBmsClicked" />
+                        </Grid>
+
+                        <!-- 연동된 BMS 파일명 -->
+                        <Grid ColumnDefinitions="*, Auto" Margin="4,2,0,0">
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding DetectedBmsName, StringFormat='연동: {0}'}"
+                                       FontSize="11"
+                                       Foreground="#c084fc"
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTip.Tip="{Binding DetectedBmsPath}"
+                                       VerticalAlignment="Center" />
+                            <Button Grid.Column="1"
+                                    IsVisible="{Binding HasDetectedBms}"
+                                    Content="✕"
+                                    FontSize="10"
+                                    Padding="4,1"
+                                    Background="Transparent"
+                                    Foreground="#999999"
+                                    Command="{Binding ClearBmsCommand}"
+                                    ToolTip.Tip="BMS 연동 해제" />
+                        </Grid>
+                        <TextBlock Text="WAV 리네임 시 BMS 내 #WAV 정의도 자동 수정됩니다."
+                                   FontSize="10"
+                                   Foreground="#94a3b8" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 6. 파일 추가 / 관리 버튼 그룹 -->
+                <StackPanel Grid.Row="5" Spacing="6" Margin="0,0,0,14">
+                    <TextBlock Text="파일 관리" FontSize="12" Foreground="#999999" />
+                    <Grid ColumnDefinitions="*, *">
+                        <Button Name="BtnAddFiles"
+                                Grid.Column="0"
+                                Content="+ 파일 추가"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Margin="0,0,3,0"
+                                Click="OnAddFilesClicked" />
+                        <Button Name="BtnAddFolder"
+                                Grid.Column="1"
+                                Content="+ 폴더 추가"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Margin="3,0,0,0"
+                                Click="OnAddFolderClicked" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*, *" Margin="0,4,0,0">
+                        <Button Grid.Column="0"
+                                Content="실행 취소"
+                                IsEnabled="{Binding CanUndo}"
+                                Command="{Binding UndoRenameCommand}"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Margin="0,0,3,0" />
+                        <Button Grid.Column="1"
+                                Content="목록 비우기"
+                                Command="{Binding ClearAllCommand}"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Margin="3,0,0,0" />
+                    </Grid>
+                </StackPanel>
+
+                <!-- 7. 에러 알림 영역 -->
+                <Border Grid.Row="6"
+                        IsVisible="{Binding GlobalErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                        Background="#442222"
+                        BorderBrush="#883333"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="8"
+                        Margin="0,0,0,10">
+                    <TextBlock Text="{Binding GlobalErrorMessage}"
+                               Foreground="#ff8888"
+                               FontSize="12"
+                               TextWrapping="Wrap" />
+                </Border>
+
+                <!-- 여백 공간 -->
+                <Border Grid.Row="7" />
+
+                <!-- 8. 하단 액션 영역: 상태 및 [적용] 버튼 -->
+                <Grid Grid.Row="8" RowDefinitions="Auto, Auto">
+                    <TextBlock Grid.Row="0"
+                               Text="{Binding StatusMessage}"
+                               FontSize="11"
+                               Foreground="#888888"
+                               TextTrimming="CharacterEllipsis"
+                               Margin="0,0,0,8" />
+
+                    <Button Grid.Row="1"
+                            Command="{Binding ApplyRenameCommand}"
+                            HorizontalAlignment="Stretch"
+                            Height="42"
+                            Background="#7c3aed"
+                            Foreground="White"
+                            FontWeight="SemiBold"
+                            FontSize="15"
+                            CornerRadius="6">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
+                            <TextBlock Text="⚡" FontSize="14" VerticalAlignment="Center" />
+                            <TextBlock Text="적용" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </Grid>
+        </Border>
+
+        <!-- 우측 메인 영역: 파일 리스트 및 실시간 미리보기 -->
+        <Grid Grid.Column="1" RowDefinitions="Auto, *">
+            <!-- 상단 헤더 바 -->
+            <Border Grid.Row="0"
+                    Background="#1f1f1f"
+                    BorderBrush="#2d2d2d"
+                    BorderThickness="0,0,0,1"
+                    Padding="14,10">
+                <Grid ColumnDefinitions="Auto, Auto, Auto, Auto, *, Auto">
+                    <!-- 전체 선택 체크박스 -->
+                    <CheckBox Grid.Column="0"
+                              IsChecked="{Binding IsAllSelected, Mode=TwoWay}"
+                              Margin="0,0,12,0" />
+
+                    <!-- 원본 카운트 -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,18,0">
+                        <TextBlock Text="📁" Margin="0,0,6,0" VerticalAlignment="Center" FontSize="13" />
+                        <TextBlock Text="원본 (" FontWeight="SemiBold" FontSize="13" />
+                        <TextBlock Text="{Binding OriginalCount}" FontWeight="Bold" FontSize="13" />
+                        <TextBlock Text=")" FontWeight="SemiBold" FontSize="13" />
+                    </StackPanel>
+
+                    <!-- 이름 바꿈 카운트 -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,18,0">
+                        <TextBlock Text="이름 바꿈 (" FontWeight="SemiBold" FontSize="13" Foreground="#999999" />
+                        <TextBlock Text="{Binding RenamedCount}" FontWeight="Bold" FontSize="13" Foreground="#a78bfa" />
+                        <TextBlock Text=")" FontWeight="SemiBold" FontSize="13" Foreground="#999999" />
+                    </StackPanel>
+
+                    <!-- 빠른 WAV 액션 버튼들 & BMS 연동 배지 -->
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <Button Content="🎵 WAV만 선택"
+                                Command="{Binding SelectOnlyWavFilesCommand}"
+                                ToolTip.Tip="비-WAV(bms, png, ogg 등)의 체크를 해제하여 보호합니다."
+                                FontSize="11"
+                                Padding="8,4"
+                                Background="#2b233a"
+                                Foreground="#c4b5fd"
+                                BorderBrush="#6d28d9"
+                                BorderThickness="1" />
+                        <Button Content="🧹 비-WAV 제거"
+                                Command="{Binding RemoveNonWavFilesCommand}"
+                                ToolTip.Tip="목록에서 WAV 이외의 모든 파일과 폴더를 제외합니다."
+                                FontSize="11"
+                                Padding="8,4"
+                                Background="#262626"
+                                Foreground="#aaaaaa"
+                                BorderBrush="#404040"
+                                BorderThickness="1" />
+
+                        <!-- BMS 연동 상태 표시 배지 -->
+                        <Border IsVisible="{Binding HasDetectedBms}"
+                                Background="#2e1065"
+                                BorderBrush="#7c3aed"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Padding="8,3"
+                                Margin="8,0,0,0"
+                                ToolTip.Tip="{Binding DetectedBmsPath, StringFormat='연동 중인 BMS 파일: {0}'}">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <TextBlock Text="🎼" FontSize="11" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding DetectedBmsName}" FontSize="11" Foreground="#e9d5ff" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- 리스트 내 검색/필터 입력창 -->
+                    <TextBox Grid.Column="5"
+                             Width="220"
+                             Height="30"
+                             Padding="8,4"
+                             PlaceholderText="목록 필터링..."
+                             Text="{Binding FilterText, Mode=TwoWay}"
+                             FontSize="12"
+                             Background="#2a2a2a"
+                             BorderBrush="#3a3a3a" />
+                </Grid>
+            </Border>
+
+            <!-- 리스트 뷰 및 빈 상태 안내 화면 -->
+            <Grid Grid.Row="1">
+                <!-- 파일 목록 (36, 32, 1*, 40, 1*, 36 균등 분할로 긴 이름도 겹치지 않음!) -->
+                <ListBox ItemsSource="{Binding DisplayItems}"
+                         Background="Transparent"
+                         Padding="4">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:RenameItemViewModel">
+                            <Border Padding="6,8"
+                                    BorderBrush="#252525"
+                                    BorderThickness="0,0,0,1"
+                                    Background="Transparent">
+                                <Grid ColumnDefinitions="36, 32, *, 50, *, 36">
+                                    <!-- 0. 체크박스 -->
+                                    <CheckBox Grid.Column="0"
+                                              IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                              VerticalAlignment="Center" />
+
+                                    <!-- 1. 아이콘 -->
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding DisplayIcon}"
+                                               FontSize="15"
+                                               VerticalAlignment="Center" />
+
+                                    <!-- 2. 원본 파일명 (1* 너비, 줄임표) -->
+                                    <Grid Grid.Column="2" ColumnDefinitions="*, Auto" VerticalAlignment="Center" Margin="0,0,8,0">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding OriginalName}"
+                                                   FontSize="13"
+                                                   Foreground="#dddddd"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip.Tip="{Binding FullPath}" />
+                                        <Border Grid.Column="1"
+                                                IsVisible="{Binding !IsAudioFile}"
+                                                Background="#333333"
+                                                CornerRadius="3"
+                                                Padding="4,1"
+                                                Margin="6,0,0,0">
+                                            <TextBlock Text="NON-WAV" FontSize="9" Foreground="#888888" VerticalAlignment="Center" />
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- 3. 변경 화살표 (50px 고정 영역, 완벽 분리) -->
+                                    <TextBlock Grid.Column="3"
+                                               Text="➔"
+                                               FontSize="14"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Foreground="{Binding ArrowColor}" />
+
+                                    <!-- 4. 변경될 새 파일명 (1* 너비, 줄임표) -->
+                                    <Grid Grid.Column="4" ColumnDefinitions="*, Auto" VerticalAlignment="Center" Margin="8,0,0,0">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding NewName}"
+                                                   FontSize="13"
+                                                   Foreground="{Binding NewNameColor}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip.Tip="{Binding NewName}" />
+
+                                        <!-- 충돌 배지 -->
+                                        <Border Grid.Column="1"
+                                                IsVisible="{Binding HasConflict}"
+                                                Background="#552222"
+                                                CornerRadius="3"
+                                                Padding="4,1"
+                                                Margin="6,0,0,0">
+                                            <TextBlock Text="충돌" FontSize="10" Foreground="#ff6666" />
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- 5. 삭제 버튼 -->
+                                    <Button Grid.Column="5"
+                                            Content="✕"
+                                            FontSize="11"
+                                            Width="24" Height="24"
+                                            Padding="0"
+                                            HorizontalAlignment="Center"
+                                            Background="Transparent"
+                                            Foreground="#666666"
+                                            Command="{Binding ((vm:MainViewModel)DataContext).RemoveItemCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                            CommandParameter="{Binding}" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <!-- 빈 목록 가이드 (Drop zone) -->
+                <Border IsVisible="{Binding !AllItems.Count}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Opacity="0.4">
+                    <StackPanel Spacing="12" HorizontalAlignment="Center">
+                        <TextBlock Text="🎵" FontSize="48" HorizontalAlignment="Center" />
+                        <TextBlock Text="폴더나 WAV 파일들을 여기에 끌어다 놓으세요."
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Text="하위 씬 폴더 안의 모든 WAV 파일과 BMS 차트를 자동 동기화합니다."
+                                   FontSize="12"
+                                   HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

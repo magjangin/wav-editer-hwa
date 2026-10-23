@@ -1,0 +1,16 @@
+# Build and output directories
+bin/
+obj/
+Publish/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+.vs/
+.idea/
+.vscode/
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+.DS_Store
