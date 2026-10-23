@@ -31,17 +31,17 @@ function Transform-WavName($name, $targetSpeed) {
         $yyFormatted = "{0:D2}" -f $newYy
         $newUid = $uid.Substring(0, 4) + $yyFormatted
 
-        # dt 값 변경 (속도 1: 1.48 / 속도 2: 1.38 / 속도 3: 1.28)
+        # dt 값 변경 (속도 1: 1.48 / 속도 2: 1.28 / 속도 3: 1.08)
         $newDtPart = $dtPart
         if ($dtPart -eq "dt1.48") {
             if ($targetSpeed -eq 1) { $newDtPart = "dt1.48" }
-            elseif ($targetSpeed -eq 2) { $newDtPart = "dt1.38" }
-            elseif ($targetSpeed -eq 3) { $newDtPart = "dt1.28" }
+            elseif ($targetSpeed -eq 2) { $newDtPart = "dt1.28" }
+            elseif ($targetSpeed -eq 3) { $newDtPart = "dt1.08" }
         }
         elseif ($dtPart -eq "dt1.47") {
             if ($targetSpeed -eq 1) { $newDtPart = "dt1.47" }
-            elseif ($targetSpeed -eq 2) { $newDtPart = "dt1.37" }
-            elseif ($targetSpeed -eq 3) { $newDtPart = "dt1.27" }
+            elseif ($targetSpeed -eq 2) { $newDtPart = "dt1.27" }
+            elseif ($targetSpeed -eq 3) { $newDtPart = "dt1.07" }
         }
 
         return "${newUid}_${desc}_${newDtPart}.wav"
