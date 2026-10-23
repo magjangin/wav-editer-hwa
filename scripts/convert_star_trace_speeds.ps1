@@ -31,17 +31,17 @@ function Transform-WavName($name, $targetSpeed) {
         $yyFormatted = "{0:D2}" -f $newYy
         $newUid = $uid.Substring(0, 4) + $yyFormatted
 
-        # dt 값 변경 (일반: 1.48/1.18/0.98, 홀드: 1.47/1.17/0.97, 보스 발사체: 0.8/0.7/0.6)
+        # dt 값 변경 (일반: 1.48/1.28/1.08, 홀드: 1.47/1.27/1.07, 보스 발사체: 0.8/0.7/0.6)
         $newDtPart = $dtPart
         if ($dtPart -eq "dt1.48") {
             if ($targetSpeed -eq 1) { $newDtPart = "dt1.48" }
-            elseif ($targetSpeed -eq 2) { $newDtPart = "dt1.18" }
-            elseif ($targetSpeed -eq 3) { $newDtPart = "dt0.98" }
+            elseif ($targetSpeed -eq 2) { $newDtPart = "dt1.28" }
+            elseif ($targetSpeed -eq 3) { $newDtPart = "dt1.08" }
         }
         elseif ($dtPart -eq "dt1.47") {
             if ($targetSpeed -eq 1) { $newDtPart = "dt1.47" }
-            elseif ($targetSpeed -eq 2) { $newDtPart = "dt1.17" }
-            elseif ($targetSpeed -eq 3) { $newDtPart = "dt0.97" }
+            elseif ($targetSpeed -eq 2) { $newDtPart = "dt1.27" }
+            elseif ($targetSpeed -eq 3) { $newDtPart = "dt1.07" }
         }
         elseif ($dtPart -eq "dt0.8") {
             if ($targetSpeed -eq 1) { $newDtPart = "dt0.8" }
