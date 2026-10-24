@@ -46,7 +46,7 @@
 - `scripts/update_speed3_hold_dt.ps1`:
   - 스피드 3 홀드 44개(`xx0203`, `xx0206`)를 `dt1.07` -> `dt1.10`으로 변경 및 `hwa2.bms` 동기화 (Spine 33프레임 1.100s 막대 렌더 꼬리 조기 통과 버그 해결).
 - `scripts/update_speed2_hold_dt.ps1`:
-  - 스피드 2 홀드 44개(`xx0202`, `xx0205`)를 `dt1.26`으로 변경 및 `hwa2.bms` 동기화 (38프레임 1.2667s 최적화 테스트).
+  - 스피드 2 홀드 44개(`xx0202`, `xx0205`)를 `dt1.26`으로 변경 및 `hwa2.bms` 동기화 (38프레임 1.2667s 실기 검증 완료 - 홀드 꼬리 렌더 일치 정답 확정).
 - `scripts/update_boss_projectile_dt.ps1`:
   - 보스 발사체(`1006yy`, `1007yy`, `1008yy` 등) 속도별 dt 일괄 변경 및 `hwa2.bms` 동기화:
     - 스피드 1: `dt0.8` (유지)
