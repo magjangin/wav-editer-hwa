@@ -45,6 +45,8 @@
   - 스피드 2(`dt1.28`, 홀드 `1.27`) 및 스피드 3(`dt1.08`, 홀드 `1.07`)의 dt 값 일괄 변경 및 `hwa2.bms` 실시간 동기화 (추천 1번 황금비 밸런스 설정).
 - `scripts/update_speed3_hold_dt.ps1`:
   - 스피드 3 홀드 44개(`xx0203`, `xx0206`)를 `dt1.07` -> `dt1.10`으로 변경 및 `hwa2.bms` 동기화 (Spine 33프레임 1.100s 막대 렌더 꼬리 조기 통과 버그 해결).
+- `scripts/update_speed2_hold_dt.ps1`:
+  - 스피드 2 홀드 44개(`xx0202`, `xx0205`)를 `dt1.27` -> `dt1.33`으로 변경 및 `hwa2.bms` 동기화 (40프레임 가설 테스트용).
 - `scripts/update_boss_projectile_dt.ps1`:
   - 보스 발사체(`1006yy`, `1007yy`, `1008yy` 등) 속도별 dt 일괄 변경 및 `hwa2.bms` 동기화:
     - 스피드 1: `dt0.8` (유지)
