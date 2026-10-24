@@ -5,19 +5,18 @@ $bmsPath = Join-Path $root "hwa2.bms"
 
 Write-Host "=========================================================="
 Write-Host "Updating Star Trace Boss Projectile dt values:"
-Write-Host " Speed 1: dt0.8 (24 frames = 0.800s)"
-Write-Host " Speed 2: dt0.65 -> dt0.63 (19 frames = 0.633s)"
-Write-Host " Speed 3: dt0.55 -> dt0.47 (14 frames = 0.467s)"
-Write-Host " 5-frame step: 24F -> 19F (-5) -> 14F (-5)"
+Write-Host " Speed 1: dt0.8 (unchanged)"
+Write-Host " Speed 2: dt0.63 -> dt0.75"
+Write-Host " Speed 3: dt0.47 -> dt0.65"
 Write-Host "=========================================================="
 
-# 1. Speed 2 폴더의 보스 발사체 파일 리네임 (dt0.65 -> dt0.63)
+# 1. Speed 2 폴더의 보스 발사체 파일 리네임 (dt0.63 -> dt0.75)
 $s2Dirs = Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -match '스피드2 wav폴더$' }
 $s2BossRenamed = 0
 foreach ($dir in $s2Dirs) {
-    $files = Get-ChildItem -Path $dir.FullName -Filter "*_dt0.65.wav"
+    $files = Get-ChildItem -Path $dir.FullName -Filter "*_dt0.63.wav"
     foreach ($f in $files) {
-        $newName = $f.Name -replace '_dt0\.65\.wav$', '_dt0.63.wav'
+        $newName = $f.Name -replace '_dt0\.63\.wav$', '_dt0.75.wav'
         if ($newName -ne $f.Name) {
             $dest = Join-Path $dir.FullName $newName
             Move-Item -Path $f.FullName -Destination $dest
@@ -27,13 +26,13 @@ foreach ($dir in $s2Dirs) {
 }
 Write-Host "Speed 2 boss projectile files renamed: $s2BossRenamed"
 
-# 2. Speed 3 폴더의 보스 발사체 파일 리네임 (dt0.55 -> dt0.47)
+# 2. Speed 3 폴더의 보스 발사체 파일 리네임 (dt0.47 -> dt0.65)
 $s3Dirs = Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -match '스피드3 wav폴더$' }
 $s3BossRenamed = 0
 foreach ($dir in $s3Dirs) {
-    $files = Get-ChildItem -Path $dir.FullName -Filter "*_dt0.55.wav"
+    $files = Get-ChildItem -Path $dir.FullName -Filter "*_dt0.47.wav"
     foreach ($f in $files) {
-        $newName = $f.Name -replace '_dt0\.55\.wav$', '_dt0.47.wav'
+        $newName = $f.Name -replace '_dt0\.47\.wav$', '_dt0.65.wav'
         if ($newName -ne $f.Name) {
             $dest = Join-Path $dir.FullName $newName
             Move-Item -Path $f.FullName -Destination $dest
@@ -45,7 +44,7 @@ Write-Host "Speed 3 boss projectile files renamed: $s3BossRenamed"
 
 # 3. hwa2.bms 업데이트
 if (Test-Path $bmsPath) {
-    $backupPath = "$bmsPath.boss_dt_063_047.bak"
+    $backupPath = "$bmsPath.boss_dt_075_065.bak"
     Copy-Item -Path $bmsPath -Destination $backupPath -Force
     Write-Host "BMS Backup created: $backupPath"
 
@@ -54,12 +53,12 @@ if (Test-Path $bmsPath) {
     for ($i = 0; $i -lt $lines.Length; $i++) {
         $line = $lines[$i]
         if ($line -match '^#WAV') {
-            if ($line -match '스피드2.+_dt0\.65\.wav$') {
-                $newLine = $line -replace '_dt0\.65\.wav$', '_dt0.63.wav'
+            if ($line -match '스피드2.+_dt0\.63\.wav$') {
+                $newLine = $line -replace '_dt0\.63\.wav$', '_dt0.75.wav'
                 $lines[$i] = $newLine
                 $updatedCount++
-            } elseif ($line -match '스피드3.+_dt0\.55\.wav$') {
-                $newLine = $line -replace '_dt0\.55\.wav$', '_dt0.47.wav'
+            } elseif ($line -match '스피드3.+_dt0\.47\.wav$') {
+                $newLine = $line -replace '_dt0\.47\.wav$', '_dt0.65.wav'
                 $lines[$i] = $newLine
                 $updatedCount++
             }
@@ -69,4 +68,4 @@ if (Test-Path $bmsPath) {
     Write-Host "Updated $updatedCount lines in $bmsPath"
 }
 
-Write-Host "ALL BOSS PROJECTILE DT UPDATES (0.8 - 0.63 - 0.47) COMPLETED SUCCESSFULLY!"
+Write-Host "ALL BOSS PROJECTILE DT UPDATES (0.8 - 0.75 - 0.65) COMPLETED SUCCESSFULLY!"
