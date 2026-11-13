@@ -15,6 +15,7 @@ Windows PowerToys의 **PowerRename** 기능을 Avalonia UI (C# / .NET 10 / MVVM)
    - WAV 파일이 있는 폴더나 상위 폴더의 `*.bms` 파일(예: `hwa2.bms`)을 **자동 감지 및 연동**
    - WAV 파일 이름을 변경할 때 BMS 내부의 `#WAVxxx <경로\파일명>`도 **실시간 자동 치환 및 갱신**
    - 원본 BMS 파일 자동 백업 (`*.bms.bak`) 생성 및 실행 취소(Undo) 시 BMS까지 원복
+   - 원본 인코딩(UTF-8 BOM 유무, CP949)·줄바꿈(LF/CRLF) 그대로 보존
 
 3. **강력한 정규식 및 치환 엔진**
    - 정규식 그룹 캡처 (`$1`, `$2`), 일반 치환, 대/소문자 구분
@@ -48,9 +49,21 @@ Antigravity 및 Claude Code와 같은 AI 코딩 어시스턴트가 직접 호출
 # 디버그 실행
 dotnet run
 
-# 자체 무결성 단위 테스트 (엔진 + BMS 동기화 검증)
+# 자체 무결성 테스트 (엔진 + 파일 이동 + BMS 동기화 + GUI 흐름, 31개)
 dotnet run -- --test
 
-# 릴리즈 빌드
-dotnet build -c Release
+# 대량 WAV 성능 측정 (기본 2,000개)
+dotnet run -c Release -- --bench
+
+# 릴리즈 배포 (MCP 등록 경로)
+dotnet publish -c Release -o Publish
 ```
+
+## 📜 dt 일괄 변경 스크립트
+
+```powershell
+# 먼저 -WhatIf 로 대상 파일/BMS 행 수 확인 후 실행
+.\scripts\Rename-DtSuffix.ps1 -Root "H:\muse dash hwa\hwa\Star Trace" -FolderPattern '스피드3 wav폴더$' -From 1.16 -To 1.18 -WhatIf
+```
+
+이미 실행한 일회성 스크립트는 `scripts/history/`에 기록용으로 보관되어 있습니다.
