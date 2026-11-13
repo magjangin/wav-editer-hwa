@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -41,15 +43,16 @@ public partial class MainViewModel : ViewModelBase
     private bool _includeFolders = false; // 기본값: 폴더 이름 변경은 제외(안전)
 
     [ObservableProperty]
-    private bool _includeSubfolders = true; // 기본값: 하위 폴더 재귀 탐색 활성화!
+    private bool _includeSubfolders = true; // 기본값: 하위 폴더 재귀 탐색 활성화
 
     [ObservableProperty]
-    private bool _onlyWavFiles = true; // 기본값: WAV 파일 전용 모드!
+    private bool _onlyWavFiles = true; // 기본값: WAV 파일 전용 모드
 
     [ObservableProperty]
-    private bool _syncWithBms = true; // BMS 파일 동기화 옵션!
+    private bool _syncWithBms = true; // BMS 파일 동기화 옵션
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasDetectedBms), nameof(DetectedBmsName))]
     private string? _detectedBmsPath;
 
     [ObservableProperty]
@@ -65,14 +68,24 @@ public partial class MainViewModel : ViewModelBase
     private string _statusMessage = "파일 또는 폴더를 드래그 앤 드롭하거나 추가하세요.";
 
     public ObservableCollection<RenameItemViewModel> AllItems { get; } = [];
-    public ObservableCollection<RenameItemViewModel> DisplayItems { get; } = [];
 
-    // 실행 취소를 위한 히스토리 (OldPath -> NewPath, BMS 백업 경로)
-    private readonly Stack<(List<(string from, string to, bool isDirectory)> files, string? bmsPath, string? bmsBackupContent)> _undoHistory = new();
+    /// <summary>
+    /// 필터 결과. 항목을 하나씩 Clear/Add 하면 목록 컨트롤에 N개의 변경 이벤트가 가므로
+    /// 필터가 바뀔 때마다 컬렉션 자체를 교체해 이벤트를 1회로 줄인다.
+    /// </summary>
+    [ObservableProperty]
+    private ObservableCollection<RenameItemViewModel> _displayItems = [];
+
+    private readonly Stack<UndoEntry> _undoHistory = new();
+
+    // 대량 추가/선택 변경 중에는 항목별 재계산을 막고 끝에서 한 번만 수행한다.
+    private bool _isBatchUpdating;
+
+    private sealed record UndoEntry(List<RenamedPath> Files, string? BmsPath, byte[]? BmsBackup);
 
     public int OriginalCount => AllItems.Count;
     public int RenamedCount => AllItems.Count(x => x.IsSelected && x.IsModified);
-    public int WavFileCount => AllItems.Count(x => x.IsAudioFile && x.Extension == ".wav");
+    public int WavFileCount => AllItems.Count(x => x.IsWavFile);
     public bool CanUndo => _undoHistory.Count > 0;
 
     public bool HasDetectedBms => !string.IsNullOrEmpty(DetectedBmsPath) && File.Exists(DetectedBmsPath);
@@ -80,11 +93,7 @@ public partial class MainViewModel : ViewModelBase
 
     public MainViewModel()
     {
-        AllItems.CollectionChanged += (s, e) =>
-        {
-            UpdateCounts();
-            FilterList();
-        };
+        AllItems.CollectionChanged += OnAllItemsChanged;
     }
 
     partial void OnSearchTextChanged(string value) => RefreshPreview();
@@ -96,28 +105,60 @@ public partial class MainViewModel : ViewModelBase
     partial void OnSelectedFormattingChanged(TextFormatting value) => RefreshPreview();
     partial void OnFilterTextChanged(string value) => FilterList();
 
-    partial void OnDetectedBmsPathChanged(string? value)
-    {
-        OnPropertyChanged(nameof(HasDetectedBms));
-        OnPropertyChanged(nameof(DetectedBmsName));
-    }
-
     partial void OnOnlyWavFilesChanged(bool value)
     {
-        if (value)
-        {
-            SelectOnlyWavFiles();
-        }
-        UpdateCounts();
+        if (value) SelectOnlyWavFiles();
     }
 
     partial void OnIsAllSelectedChanged(bool value)
     {
-        foreach (var item in AllItems)
+        RunBatch(() =>
         {
-            item.IsSelected = value;
+            foreach (var item in AllItems) item.IsSelected = value;
+        });
+        OnSelectionChanged();
+    }
+
+    private void OnAllItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.NewItems != null)
+            foreach (RenameItemViewModel item in e.NewItems) item.PropertyChanged += OnItemPropertyChanged;
+        if (e.OldItems != null)
+            foreach (RenameItemViewModel item in e.OldItems) item.PropertyChanged -= OnItemPropertyChanged;
+
+        if (_isBatchUpdating) return;
+
+        // 단건 삭제는 목록 스크롤 위치가 유지되도록 표시 목록에서만 빼고, 그 외에는 다시 필터링한다.
+        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems != null)
+        {
+            foreach (RenameItemViewModel item in e.OldItems) DisplayItems.Remove(item);
+        }
+        else
+        {
+            FilterList();
         }
         UpdateCounts();
+    }
+
+    private void OnItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!_isBatchUpdating && e.PropertyName == nameof(RenameItemViewModel.IsSelected))
+            OnSelectionChanged();
+    }
+
+    // 선택 해제로 충돌이 풀릴 수 있으므로 선택이 바뀌면 충돌 표시도 다시 계산한다.
+    private void OnSelectionChanged()
+    {
+        CheckConflicts();
+        UpdateCounts();
+    }
+
+    private void RunBatch(Action action)
+    {
+        bool wasBatching = _isBatchUpdating;
+        _isBatchUpdating = true;
+        try { action(); }
+        finally { _isBatchUpdating = wasBatching; }
     }
 
     [RelayCommand]
@@ -150,115 +191,90 @@ public partial class MainViewModel : ViewModelBase
             }
         }
 
-        foreach (var path in pathList)
+        void Add(string path, bool isDirectory)
         {
-            if (File.Exists(path))
-            {
-                // .bms 파일을 직접 드롭한 경우 자동 연동
-                if (Path.GetExtension(path).Equals(".bms", StringComparison.OrdinalIgnoreCase))
-                {
-                    DetectedBmsPath = path;
-                    continue;
-                }
-
-                if (ShouldIncludeFile(path) && existingPaths.Add(path))
-                {
-                    var vm = new RenameItemViewModel(path, false);
-                    HookItem(vm);
-                    AllItems.Add(vm);
-                }
-            }
-            else if (Directory.Exists(path))
-            {
-                if (IncludeFolders && existingPaths.Add(path))
-                {
-                    var vm = new RenameItemViewModel(path, true);
-                    HookItem(vm);
-                    AllItems.Add(vm);
-                }
-
-                try
-                {
-                    var searchOption = IncludeSubfolders ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-
-                    if (IncludeFiles)
-                    {
-                        var pattern = OnlyWavFiles ? "*.wav" : "*";
-                        foreach (var subFile in Directory.EnumerateFiles(path, pattern, searchOption))
-                        {
-                            if (ShouldIncludeFile(subFile) && existingPaths.Add(subFile))
-                            {
-                                var vm = new RenameItemViewModel(subFile, false);
-                                HookItem(vm);
-                                AllItems.Add(vm);
-                            }
-                        }
-                    }
-
-                    if (IncludeFolders && IncludeSubfolders)
-                    {
-                        foreach (var subDir in Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories))
-                        {
-                            if (existingPaths.Add(subDir))
-                            {
-                                var vm = new RenameItemViewModel(subDir, true);
-                                HookItem(vm);
-                                AllItems.Add(vm);
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    StatusMessage = $"폴더 탐색 중 오류: {ex.Message}";
-                }
-            }
+            if (existingPaths.Add(path))
+                AllItems.Add(new RenameItemViewModel(path, isDirectory));
         }
 
+        RunBatch(() =>
+        {
+            foreach (var path in pathList)
+            {
+                if (File.Exists(path))
+                {
+                    // .bms 파일을 직접 드롭한 경우 자동 연동
+                    if (Path.GetExtension(path).Equals(".bms", StringComparison.OrdinalIgnoreCase))
+                    {
+                        DetectedBmsPath = path;
+                        continue;
+                    }
+
+                    if (ShouldIncludeFile(path)) Add(path, false);
+                }
+                else if (Directory.Exists(path))
+                {
+                    if (IncludeFolders) Add(path, true);
+
+                    try
+                    {
+                        var searchOption = IncludeSubfolders ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+
+                        if (IncludeFiles)
+                        {
+                            var pattern = OnlyWavFiles ? "*.wav" : "*";
+                            foreach (var subFile in Directory.EnumerateFiles(path, pattern, searchOption))
+                            {
+                                if (ShouldIncludeFile(subFile)) Add(subFile, false);
+                            }
+                        }
+
+                        if (IncludeFolders && IncludeSubfolders)
+                        {
+                            foreach (var subDir in Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories))
+                            {
+                                Add(subDir, true);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        StatusMessage = $"폴더 탐색 중 오류: {ex.Message}";
+                    }
+                }
+            }
+        });
+
         RefreshPreview();
+        FilterList();
     }
 
     private bool ShouldIncludeFile(string filePath)
     {
         if (!IncludeFiles) return false;
-        if (OnlyWavFiles)
-        {
-            return Path.GetExtension(filePath).Equals(".wav", StringComparison.OrdinalIgnoreCase);
-        }
-        return true;
-    }
-
-    private void HookItem(RenameItemViewModel item)
-    {
-        item.PropertyChanged += (s, e) =>
-        {
-            if (e.PropertyName == nameof(RenameItemViewModel.IsSelected))
-            {
-                UpdateCounts();
-            }
-        };
+        return !OnlyWavFiles || Path.GetExtension(filePath).Equals(".wav", StringComparison.OrdinalIgnoreCase);
     }
 
     [RelayCommand]
     public void SelectOnlyWavFiles()
     {
-        foreach (var item in AllItems)
+        RunBatch(() =>
         {
-            item.IsSelected = !item.IsDirectory && item.Extension.Equals(".wav", StringComparison.OrdinalIgnoreCase);
-        }
-        UpdateCounts();
+            foreach (var item in AllItems) item.IsSelected = item.IsWavFile;
+        });
+        OnSelectionChanged();
     }
 
     [RelayCommand]
     public void RemoveNonWavFiles()
     {
-        var nonWav = AllItems.Where(x => x.IsDirectory || !x.Extension.Equals(".wav", StringComparison.OrdinalIgnoreCase)).ToList();
-        foreach (var item in nonWav)
+        var nonWav = AllItems.Where(x => !x.IsWavFile).ToList();
+        RunBatch(() =>
         {
-            AllItems.Remove(item);
-            DisplayItems.Remove(item);
-        }
+            foreach (var item in nonWav) AllItems.Remove(item);
+        });
         RefreshPreview();
+        FilterList();
         StatusMessage = $"{nonWav.Count}개의 비-WAV 항목을 목록에서 제거했습니다.";
     }
 
@@ -266,7 +282,6 @@ public partial class MainViewModel : ViewModelBase
     public void RemoveItem(RenameItemViewModel item)
     {
         AllItems.Remove(item);
-        DisplayItems.Remove(item);
         RefreshPreview();
     }
 
@@ -274,8 +289,6 @@ public partial class MainViewModel : ViewModelBase
     public void ClearAll()
     {
         AllItems.Clear();
-        DisplayItems.Clear();
-        UpdateCounts();
     }
 
     [RelayCommand]
@@ -296,35 +309,19 @@ public partial class MainViewModel : ViewModelBase
         IsAllSelected = false;
     }
 
+    private RenameOptions CurrentOptions => new(
+        SearchText, ReplaceText, UseRegex, MatchAll, MatchCase, SelectedScope, SelectedFormatting);
+
     public void RefreshPreview()
     {
-        GlobalErrorMessage = null;
-        string? firstError = null;
+        // 정규식은 키 입력 1회당 한 번만 컴파일한다 (이전: 항목 수만큼 생성).
+        var engine = RenameEngine.Create(CurrentOptions);
+        string? firstError = engine.Error;
 
         foreach (var item in AllItems)
         {
-            string newName = RenameEngine.Transform(
-                item.OriginalName,
-                item.IsDirectory,
-                SearchText,
-                ReplaceText,
-                UseRegex,
-                MatchAll,
-                MatchCase,
-                SelectedScope,
-                SelectedFormatting,
-                out var error
-            );
-
-            if (error != null && firstError == null)
-            {
-                firstError = error;
-            }
-
-            item.NewName = newName;
-            item.Status = RenameStatus.Pending;
-            item.StatusMessage = null;
-            item.HasConflict = false;
+            item.NewName = engine.Transform(item.OriginalName, item.IsDirectory, out var error);
+            firstError ??= error;
         }
 
         GlobalErrorMessage = firstError;
@@ -335,38 +332,30 @@ public partial class MainViewModel : ViewModelBase
 
     private void CheckConflicts()
     {
-        var groups = AllItems
+        var conflicted = AllItems
             .Where(x => x.IsSelected && x.IsModified)
-            .GroupBy(x => Path.Combine(x.DirectoryPath, x.NewName).ToLowerInvariant());
+            .GroupBy(x => x.TargetPath, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Skip(1).Any())
+            .SelectMany(g => g)
+            .ToHashSet();
 
-        foreach (var group in groups)
+        foreach (var item in AllItems)
         {
-            if (group.Count() > 1)
-            {
-                foreach (var item in group)
-                {
-                    item.HasConflict = true;
-                    item.Status = RenameStatus.Conflict;
-                    item.StatusMessage = "중복된 대상 파일명이 존재합니다.";
-                }
-            }
+            bool hasConflict = conflicted.Contains(item);
+            item.HasConflict = hasConflict;
+            item.Status = hasConflict ? RenameStatus.Conflict : RenameStatus.Pending;
+            item.StatusMessage = hasConflict ? "중복된 대상 파일명이 존재합니다." : null;
         }
     }
 
     public void FilterList()
     {
-        DisplayItems.Clear();
         var filter = FilterText.Trim();
-
-        foreach (var item in AllItems)
-        {
-            if (string.IsNullOrEmpty(filter) ||
+        DisplayItems = string.IsNullOrEmpty(filter)
+            ? new ObservableCollection<RenameItemViewModel>(AllItems)
+            : new ObservableCollection<RenameItemViewModel>(AllItems.Where(item =>
                 item.OriginalName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                item.NewName.Contains(filter, StringComparison.OrdinalIgnoreCase))
-            {
-                DisplayItems.Add(item);
-            }
-        }
+                item.NewName.Contains(filter, StringComparison.OrdinalIgnoreCase)));
     }
 
     private void UpdateCounts()
@@ -376,165 +365,173 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(WavFileCount));
     }
 
+    private sealed record MovePlan(RenameItemViewModel Item, string OldPath, string NewPath, bool IsDirectory);
+
+    private sealed record MoveResult(MovePlan Plan, string? Error);
+
     [RelayCommand]
     public async Task ApplyRenameAsync()
     {
-        var targetItems = AllItems.Where(x => x.IsSelected && x.IsModified && !x.HasConflict).ToList();
-        if (targetItems.Count == 0)
+        // 하위 경로부터 처리해야 상위 폴더 이름이 먼저 바뀌어 경로가 깨지는 일을 막는다.
+        var plans = AllItems
+            .Where(x => x.IsSelected && x.IsModified && !x.HasConflict)
+            .Select(x => new MovePlan(x, x.FullPath, x.TargetPath, x.IsDirectory))
+            .OrderByDescending(p => p.OldPath.Count(c => c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar))
+            .ToList();
+
+        if (plans.Count == 0)
         {
             StatusMessage = "이름을 바꿀 선택된 항목이 없습니다.";
             return;
         }
 
-        int successCount = 0;
-        int errorCount = 0;
-        var batchHistory = new List<(string from, string to, bool isDirectory)>();
+        string? bmsPath = SyncWithBms && HasDetectedBms ? DetectedBmsPath : null;
+        StatusMessage = $"{plans.Count}개 항목 이름 변경 중...";
 
-        // BMS 파일 백업 텍스트 보관 (Undo 용)
-        string? bmsBackupContent = null;
-        if (SyncWithBms && HasDetectedBms && File.Exists(DetectedBmsPath))
+        // 디스크 I/O는 UI 스레드 밖에서 수행한다 (수천 개 WAV에서 창이 멈추지 않도록).
+        var (results, bmsBackup, bmsSyncCount, bmsError) = await Task.Run(() =>
         {
-            try
+            byte[]? backup = null;
+            if (bmsPath != null)
             {
-                bmsBackupContent = File.ReadAllText(DetectedBmsPath);
+                try { backup = File.ReadAllBytes(bmsPath); } catch { /* 실행 취소 시 BMS 복구만 생략 */ }
             }
-            catch { }
-        }
 
-        var sortedItems = targetItems
-            .OrderByDescending(x => x.FullPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Length)
-            .ToList();
-
-        foreach (var item in sortedItems)
-        {
-            try
+            var moveResults = new List<MoveResult>(plans.Count);
+            foreach (var plan in plans)
             {
-                string oldPath = item.FullPath;
-                string newPath = Path.Combine(item.DirectoryPath, item.NewName);
-
-                if (string.Equals(oldPath, newPath, StringComparison.Ordinal))
-                    continue;
-
-                if (string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
+                try
                 {
-                    string tempPath = Path.Combine(item.DirectoryPath, $"__pr_temp_{Guid.NewGuid():N}");
-                    if (item.IsDirectory)
-                    {
-                        Directory.Move(oldPath, tempPath);
-                        Directory.Move(tempPath, newPath);
-                    }
-                    else
-                    {
-                        File.Move(oldPath, tempPath);
-                        File.Move(tempPath, newPath);
-                    }
+                    FileRenamer.Move(plan.OldPath, plan.NewPath, plan.IsDirectory);
+                    moveResults.Add(new MoveResult(plan, null));
                 }
-                else
+                catch (Exception ex)
                 {
-                    if (item.IsDirectory)
-                    {
-                        if (Directory.Exists(newPath))
-                            throw new IOException($"이미 대상 폴더가 존재합니다: {item.NewName}");
-                        Directory.Move(oldPath, newPath);
-                    }
-                    else
-                    {
-                        if (File.Exists(newPath))
-                            throw new IOException($"이미 대상 파일이 존재합니다: {item.NewName}");
-                        File.Move(oldPath, newPath);
-                    }
+                    moveResults.Add(new MoveResult(plan, ex.Message));
                 }
-
-                batchHistory.Add((oldPath, newPath, item.IsDirectory));
-                item.FullPath = newPath;
-                item.OriginalName = item.NewName;
-                item.Status = RenameStatus.Renamed;
-                item.StatusMessage = "완료";
-                successCount++;
             }
-            catch (Exception ex)
+
+            // BMS에는 디스크에서 실제로 성공한 변경만 반영한다.
+            int synced = 0;
+            string? syncError = null;
+            var succeeded = moveResults.Where(r => r.Error == null).Select(r => ToRenamedPath(r.Plan)).ToList();
+            if (bmsPath != null && succeeded.Count > 0)
             {
-                item.Status = RenameStatus.Error;
-                item.StatusMessage = ex.Message;
-                errorCount++;
+                synced = BmsSyncService.SyncBmsFile(bmsPath, succeeded, out syncError);
+            }
+
+            return (moveResults, backup, synced, syncError);
+        });
+
+        var history = new List<RenamedPath>();
+        foreach (var (plan, error) in results)
+        {
+            if (error == null)
+            {
+                plan.Item.MarkMovedTo(plan.NewPath);
+                if (plan.IsDirectory) RebaseChildren(plan.OldPath, plan.NewPath);
+                history.Add(ToRenamedPath(plan));
             }
         }
 
-        // BMS 파일 동기화 갱신
-        int bmsSyncCount = 0;
-        string? bmsError = null;
-        if (SyncWithBms && HasDetectedBms && !string.IsNullOrEmpty(DetectedBmsPath))
+        if (history.Count > 0)
         {
-            bmsSyncCount = BmsSyncService.SyncBmsFile(DetectedBmsPath, targetItems, out bmsError);
-        }
-
-        if (batchHistory.Count > 0)
-        {
-            _undoHistory.Push((batchHistory, DetectedBmsPath, bmsBackupContent));
+            _undoHistory.Push(new UndoEntry(history, bmsPath, bmsSyncCount > 0 ? bmsBackup : null));
             OnPropertyChanged(nameof(CanUndo));
         }
 
-        string bmsMsg = HasDetectedBms && SyncWithBms ? $" (BMS 동기화: {bmsSyncCount}개 행 갱신)" : "";
-        StatusMessage = $"완료: {successCount}개 변경 성공{bmsMsg}" + (errorCount > 0 ? $", {errorCount}개 실패" : "") + (bmsError != null ? $" [BMS 오류: {bmsError}]" : "");
         RefreshPreview();
-        await Task.CompletedTask;
+
+        // RefreshPreview가 상태를 초기화하므로 실패 표시는 그 뒤에 남긴다.
+        var failures = results.Where(r => r.Error != null).ToList();
+        foreach (var (plan, error) in failures)
+        {
+            plan.Item.Status = RenameStatus.Error;
+            plan.Item.StatusMessage = error;
+        }
+
+        string bmsMsg = bmsPath != null ? $" (BMS 동기화: {bmsSyncCount}개 행 갱신)" : "";
+        StatusMessage = $"완료: {history.Count}개 변경 성공{bmsMsg}"
+            + (failures.Count > 0 ? $", {failures.Count}개 실패 (첫 오류: {failures[0].Error})" : "")
+            + (bmsError != null ? $" [BMS 오류: {bmsError}]" : "");
+    }
+
+    private static RenamedPath ToRenamedPath(MovePlan plan) => new(plan.OldPath, plan.NewPath, plan.IsDirectory);
+
+    /// <summary>폴더 이름이 바뀐 뒤, 그 아래에 있던 목록 항목들의 경로를 새 폴더 기준으로 고친다.</summary>
+    private void RebaseChildren(string oldDir, string newDir)
+    {
+        string oldPrefix = Path.TrimEndingDirectorySeparator(oldDir) + Path.DirectorySeparatorChar;
+        foreach (var item in AllItems)
+        {
+            if (item.FullPath.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                item.FullPath = Path.Combine(newDir, item.FullPath[oldPrefix.Length..]);
+                item.DirectoryPath = Path.GetDirectoryName(item.FullPath) ?? item.DirectoryPath;
+            }
+        }
     }
 
     [RelayCommand]
-    public void UndoRename()
+    public async Task UndoRenameAsync()
     {
         if (_undoHistory.Count == 0) return;
 
-        var (files, bmsPath, bmsBackupContent) = _undoHistory.Pop();
-        int undoSuccess = 0;
-
-        foreach (var (from, to, isDirectory) in files.AsEnumerable().Reverse())
-        {
-            try
-            {
-                if (isDirectory)
-                {
-                    if (Directory.Exists(to))
-                    {
-                        Directory.Move(to, from);
-                        undoSuccess++;
-                    }
-                }
-                else
-                {
-                    if (File.Exists(to))
-                    {
-                        File.Move(to, from);
-                        undoSuccess++;
-                    }
-                }
-
-                var item = AllItems.FirstOrDefault(x => x.FullPath.Equals(to, StringComparison.OrdinalIgnoreCase));
-                if (item != null)
-                {
-                    item.FullPath = from;
-                    item.OriginalName = Path.GetFileName(from);
-                    item.NewName = item.OriginalName;
-                }
-            }
-            catch
-            {
-                // ignore
-            }
-        }
-
-        // BMS 파일 원복
-        if (!string.IsNullOrEmpty(bmsPath) && bmsBackupContent != null && File.Exists(bmsPath))
-        {
-            try
-            {
-                File.WriteAllText(bmsPath, bmsBackupContent);
-            }
-            catch { }
-        }
-
+        var entry = _undoHistory.Pop();
         OnPropertyChanged(nameof(CanUndo));
-        StatusMessage = $"실행 취소 완료: {undoSuccess}개 파일 및 BMS 파일 복구됨";
+
+        // 적용 순서의 역순으로 되돌린다 (상위 폴더 → 하위 항목).
+        var reversed = Enumerable.Reverse(entry.Files).ToList();
+        var (restored, failCount) = await Task.Run(() =>
+        {
+            var ok = new List<RenamedPath>();
+            int failed = 0;
+            foreach (var rename in reversed)
+            {
+                bool exists = rename.IsDirectory ? Directory.Exists(rename.NewPath) : File.Exists(rename.NewPath);
+                if (!exists) { failed++; continue; }
+                try
+                {
+                    FileRenamer.Move(rename.NewPath, rename.OldPath, rename.IsDirectory);
+                    ok.Add(rename);
+                }
+                catch
+                {
+                    failed++;
+                }
+            }
+
+            // BMS는 동기화 직전의 원본 바이트로 복구 (인코딩·BOM 보존)
+            if (entry.BmsPath != null && entry.BmsBackup != null && File.Exists(entry.BmsPath))
+            {
+                try { File.WriteAllBytes(entry.BmsPath, entry.BmsBackup); } catch { /* 상태 메시지로 충분 */ }
+            }
+
+            return (ok, failed);
+        });
+
+        // 폴더 복구는 하위 항목 경로를 연쇄적으로 바꾸므로 그때는 매번 직접 찾고,
+        // 파일만 있는 일반적인 경우에는 사전 조회로 O(n) 에 처리한다.
+        bool hasDirectories = restored.Any(r => r.IsDirectory);
+        var byPath = hasDirectories ? null : AllItems
+            .GroupBy(x => x.FullPath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        RenameItemViewModel? Find(string path) => byPath != null
+            ? byPath.GetValueOrDefault(path)
+            : AllItems.FirstOrDefault(x => x.FullPath.Equals(path, StringComparison.OrdinalIgnoreCase));
+
+        foreach (var rename in restored)
+        {
+            if (Find(rename.NewPath) is { } item)
+            {
+                item.MarkMovedTo(rename.OldPath);
+                if (rename.IsDirectory) RebaseChildren(rename.NewPath, rename.OldPath);
+            }
+        }
+
+        string bmsMsg = entry.BmsBackup != null ? " 및 BMS 파일" : "";
+        StatusMessage = $"실행 취소 완료: {restored.Count}개 파일{bmsMsg} 복구됨" + (failCount > 0 ? $", {failCount}개 실패" : "");
         RefreshPreview();
     }
 }

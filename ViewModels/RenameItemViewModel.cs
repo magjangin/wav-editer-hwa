@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using PowerRenameAvalonia.Models;
@@ -13,9 +14,11 @@ public partial class RenameItemViewModel : ObservableObject
     private string _directoryPath;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsModified), nameof(DisplayIcon), nameof(ArrowColor), nameof(NewNameColor), nameof(IsAudioFile), nameof(Extension))]
     private string _originalName;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsModified), nameof(ArrowColor), nameof(NewNameColor))]
     private string _newName;
 
     [ObservableProperty]
@@ -31,13 +34,19 @@ public partial class RenameItemViewModel : ObservableObject
     private string? _statusMessage;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NewNameColor))]
     private bool _hasConflict;
 
-    public bool IsModified => OriginalName != NewName;
+    // 필터·카운트에서 수천 번 호출되므로 원래 이름이 바뀔 때만 다시 계산한다.
+    private string _extension = string.Empty;
 
-    public string Extension => Path.GetExtension(OriginalName).ToLowerInvariant();
+    public bool IsModified => !string.Equals(OriginalName, NewName, StringComparison.Ordinal);
 
-    public bool IsAudioFile => Extension is ".wav" or ".mp3" or ".ogg" or ".flac" or ".aiff" or ".m4a";
+    public string Extension => _extension;
+
+    public bool IsWavFile => !IsDirectory && _extension == ".wav";
+
+    public bool IsAudioFile => _extension is ".wav" or ".mp3" or ".ogg" or ".flac" or ".aiff" or ".m4a";
 
     public string DisplayIcon => IsDirectory ? "📁" : (IsAudioFile ? "🎵" : "📄");
 
@@ -52,6 +61,9 @@ public partial class RenameItemViewModel : ObservableObject
             return "#777777";                 // Dim Gray
         }
     }
+
+    /// <summary>이 항목을 적용했을 때의 대상 전체 경로.</summary>
+    public string TargetPath => Path.Combine(DirectoryPath, NewName);
 
     public RenameItemViewModel(string path, bool isDirectory)
     {
@@ -72,25 +84,19 @@ public partial class RenameItemViewModel : ObservableObject
         }
 
         _newName = _originalName;
-    }
-
-    partial void OnNewNameChanged(string value)
-    {
-        OnPropertyChanged(nameof(IsModified));
-        OnPropertyChanged(nameof(ArrowColor));
-        OnPropertyChanged(nameof(NewNameColor));
+        _extension = Path.GetExtension(_originalName).ToLowerInvariant();
     }
 
     partial void OnOriginalNameChanged(string value)
     {
-        OnPropertyChanged(nameof(IsModified));
-        OnPropertyChanged(nameof(DisplayIcon));
-        OnPropertyChanged(nameof(ArrowColor));
-        OnPropertyChanged(nameof(NewNameColor));
+        _extension = Path.GetExtension(value).ToLowerInvariant();
     }
 
-    partial void OnHasConflictChanged(bool value)
+    /// <summary>디스크 이동이 끝난 뒤 항목을 새 경로 기준으로 갱신한다.</summary>
+    public void MarkMovedTo(string newPath)
     {
-        OnPropertyChanged(nameof(NewNameColor));
+        FullPath = newPath;
+        OriginalName = Path.GetFileName(newPath);
+        NewName = OriginalName;
     }
 }

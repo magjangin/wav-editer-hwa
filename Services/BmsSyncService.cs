@@ -1,53 +1,64 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using PowerRenameAvalonia.ViewModels;
+using PowerRenameAvalonia.Models;
 
 namespace PowerRenameAvalonia.Services;
 
 public static class BmsSyncService
 {
-    // #WAV01 또는 #WAV001 과 같은 헤더 패턴
-    private static readonly Regex WavHeaderRegex = new(@"^(#WAV[0-9A-Za-z]{2,3})\s+(.+)$", RegexOptions.Compiled);
+    // #WAV01 / #WAV001 정의 행. 1그룹 = "#WAVxx" + 구분 공백(원문 그대로 보존), 2그룹 = 경로.
+    // 행 끝의 공백·\r 은 경로에 포함하지 않아 원래 줄바꿈(LF/CRLF)이 그대로 유지된다.
+    private static readonly Regex WavDefinitionRegex = new(
+        @"^(#WAV[0-9A-Za-z]{2,3}[ \t]+)(.+?)[ \t]*(?=\r?$)",
+        RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    static BmsSyncService()
+    {
+        // CP949/Shift-JIS 등 ANSI 코드 페이지 BMS를 손상 없이 다루기 위해 등록.
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+    }
 
     /// <summary>
-    /// 지정된 디렉토리 또는 그 상위/하위 디렉토리에서 .bms 파일을 자동 탐색합니다.
+    /// 지정된 경로(파일이면 그 폴더)와 상위 폴더에서 .bms 파일을 자동 탐색합니다.
     /// </summary>
-    public static string? DetectBmsFile(IEnumerable<string> filePaths)
+    public static string? DetectBmsFile(IEnumerable<string> paths)
     {
-        var directories = filePaths
+        var directories = paths
             .Select(p => File.Exists(p) ? Path.GetDirectoryName(p) : (Directory.Exists(p) ? p : null))
-            .Where(d => !string.IsNullOrEmpty(d))
-            .Distinct()
-            .ToList();
+            .OfType<string>()
+            .Where(d => d.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
 
         foreach (var dir in directories)
         {
-            if (dir == null) continue;
-
-            // 1. 해당 폴더 내 .bms 파일
-            var bmsFiles = Directory.GetFiles(dir, "*.bms", SearchOption.TopDirectoryOnly);
-            if (bmsFiles.Length > 0) return bmsFiles[0];
-
-            // 2. 부모 폴더 내 .bms 파일
-            var parent = Directory.GetParent(dir);
-            if (parent != null && parent.Exists)
-            {
-                var parentBms = Directory.GetFiles(parent.FullName, "*.bms", SearchOption.TopDirectoryOnly);
-                if (parentBms.Length > 0) return parentBms[0];
-            }
+            var found = FirstBmsIn(dir) ?? (Directory.GetParent(dir) is { Exists: true } parent ? FirstBmsIn(parent.FullName) : null);
+            if (found != null) return found;
         }
 
         return null;
     }
 
+    private static string? FirstBmsIn(string dir)
+        => Directory.EnumerateFiles(dir, "*.bms", SearchOption.TopDirectoryOnly).FirstOrDefault();
+
+    /// <summary>BMS 파일의 #WAV 정의 경로 목록을 읽습니다 (인코딩 자동 감지).</summary>
+    public static List<string> ReadWavDefinitions(string bmsFilePath)
+    {
+        var (text, _) = ReadText(File.ReadAllBytes(bmsFilePath));
+        return WavDefinitionRegex.Matches(text).Select(m => m.Groups[2].Value).ToList();
+    }
+
     /// <summary>
-    /// BMS 파일 내부의 #WAV 정의들을 변경된 파일명으로 동기화 갱신합니다.
+    /// 실제로 성공한 이름 변경 목록을 받아 BMS 내부의 #WAV 정의를 갱신합니다.
+    /// 변경된 행이 있을 때만 <c>.bms.bak</c> 백업을 만들고 원본 인코딩·BOM·줄바꿈을 유지해 저장합니다.
     /// </summary>
-    public static int SyncBmsFile(string bmsFilePath, IReadOnlyList<RenameItemViewModel> renamedItems, out string? errorMessage)
+    /// <returns>갱신된 #WAV 행 수</returns>
+    public static int SyncBmsFile(string bmsFilePath, IReadOnlyCollection<RenamedPath> renames, out string? errorMessage)
     {
         errorMessage = null;
 
@@ -59,69 +70,38 @@ public static class BmsSyncService
 
         try
         {
-            // 변경 매핑 생성 (파일명 기준 및 상대경로 기준)
-            var bmsDir = Path.GetDirectoryName(bmsFilePath) ?? string.Empty;
-
-            var nameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var relativeMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var item in renamedItems)
-            {
-                if (!item.IsModified) continue;
-
-                nameMap[item.OriginalName] = item.NewName;
-
-                if (!string.IsNullOrEmpty(bmsDir) && item.FullPath.StartsWith(bmsDir, StringComparison.OrdinalIgnoreCase))
-                {
-                    string oldRel = Path.GetRelativePath(bmsDir, item.FullPath);
-                    string newRel = Path.Combine(Path.GetDirectoryName(oldRel) ?? string.Empty, item.NewName);
-
-                    relativeMap[oldRel.Replace('/', '\\')] = newRel.Replace('/', '\\');
-                    relativeMap[oldRel.Replace('\\', '/')] = newRel.Replace('\\', '/');
-                }
-            }
-
+            var (nameMap, relativeMap) = BuildMaps(bmsFilePath, renames);
             if (nameMap.Count == 0) return 0;
 
-            // 자동 백업 생성 (.bms.bak)
-            string backupPath = bmsFilePath + ".bak";
-            File.Copy(bmsFilePath, backupPath, true);
+            byte[] original = File.ReadAllBytes(bmsFilePath);
+            var (text, encoding) = ReadText(original);
 
-            // BMS 읽기 (UTF-8 인코딩)
-            var encoding = DetectEncoding(bmsFilePath);
-            var lines = File.ReadAllLines(bmsFilePath, encoding);
             int replacedCount = 0;
-
-            for (int i = 0; i < lines.Length; i++)
+            string updated = WavDefinitionRegex.Replace(text, m =>
             {
-                var match = WavHeaderRegex.Match(lines[i]);
-                if (match.Success)
+                string wavPath = m.Groups[2].Value;
+                string? newPath = null;
+
+                // 1. 상대경로 매칭 우선
+                if (relativeMap.TryGetValue(wavPath, out var newRel))
                 {
-                    string headerKey = match.Groups[1].Value;
-                    string wavPath = match.Groups[2].Value.Trim();
-
-                    string wavFileName = Path.GetFileName(wavPath);
-                    string wavDir = Path.GetDirectoryName(wavPath) ?? string.Empty;
-
-                    // 1. 상대경로 매칭 우선
-                    if (relativeMap.TryGetValue(wavPath, out var newRelPath))
-                    {
-                        lines[i] = $"{headerKey} {newRelPath}";
-                        replacedCount++;
-                    }
-                    // 2. 파일명 매칭
-                    else if (nameMap.TryGetValue(wavFileName, out var newFileName))
-                    {
-                        string newPath = string.IsNullOrEmpty(wavDir) ? newFileName : Path.Combine(wavDir, newFileName);
-                        lines[i] = $"{headerKey} {newPath}";
-                        replacedCount++;
-                    }
+                    newPath = newRel;
                 }
-            }
+                // 2. 파일명 매칭 (BMS 안의 폴더 부분과 구분자는 원문 그대로 유지)
+                else if (nameMap.TryGetValue(GetFileName(wavPath), out var newFileName))
+                {
+                    newPath = wavPath[..^GetFileName(wavPath).Length] + newFileName;
+                }
+
+                if (newPath == null || newPath == wavPath) return m.Value;
+                replacedCount++;
+                return m.Groups[1].Value + newPath;
+            });
 
             if (replacedCount > 0)
             {
-                File.WriteAllLines(bmsFilePath, lines, encoding);
+                File.WriteAllBytes(bmsFilePath + ".bak", original);
+                File.WriteAllBytes(bmsFilePath, Encode(updated, encoding));
             }
 
             return replacedCount;
@@ -133,20 +113,70 @@ public static class BmsSyncService
         }
     }
 
-    private static Encoding DetectEncoding(string filePath)
+    private static (Dictionary<string, string> nameMap, Dictionary<string, string> relativeMap) BuildMaps(
+        string bmsFilePath, IEnumerable<RenamedPath> renames)
     {
-        // BOM 확인
-        byte[] buffer = new byte[4];
-        using (var file = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+        string bmsDir = Path.GetDirectoryName(Path.GetFullPath(bmsFilePath)) ?? string.Empty;
+        var nameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var relativeMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (oldPath, newPath, isDirectory) in renames)
         {
-            int read = file.Read(buffer, 0, 4);
-            if (read >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF)
-            {
-                return new UTF8Encoding(true);
-            }
+            if (isDirectory) continue;
+
+            string oldName = Path.GetFileName(oldPath);
+            string newName = Path.GetFileName(newPath);
+            if (string.Equals(oldName, newName, StringComparison.Ordinal)) continue;
+
+            nameMap[oldName] = newName;
+
+            // BMS 폴더 하위인지 경로 경계 기준으로 판정 ("C:\foo"가 "C:\foobar"를 포함한다고 보지 않음)
+            string oldRel = Path.GetRelativePath(bmsDir, Path.GetFullPath(oldPath));
+            if (oldRel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(oldRel)) continue;
+
+            string newRel = Path.Combine(Path.GetDirectoryName(oldRel) ?? string.Empty, newName);
+            relativeMap[oldRel.Replace('/', '\\')] = newRel.Replace('/', '\\');
+            relativeMap[oldRel.Replace('\\', '/')] = newRel.Replace('\\', '/');
         }
 
-        // 기본 UTF-8 (BOM 없음)
-        return new UTF8Encoding(false);
+        return (nameMap, relativeMap);
+    }
+
+    // BMS 경로는 OS와 무관하게 '\' 와 '/' 를 모두 구분자로 취급한다.
+    private static string GetFileName(string bmsPath)
+    {
+        int idx = bmsPath.LastIndexOfAny(['\\', '/']);
+        return idx < 0 ? bmsPath : bmsPath[(idx + 1)..];
+    }
+
+    /// <summary>
+    /// UTF-8(BOM 유무) 우선, 유효하지 않으면 시스템 ANSI 코드 페이지(한국어 Windows = CP949)로 해석한다.
+    /// ANSI 해석이 원본 바이트로 정확히 되돌아가지 않으면 손상을 막기 위해 예외를 던진다.
+    /// </summary>
+    internal static (string text, Encoding encoding) ReadText(byte[] bytes)
+    {
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            return (new UTF8Encoding(false, true).GetString(bytes, 3, bytes.Length - 3), new UTF8Encoding(true));
+
+        try
+        {
+            return (new UTF8Encoding(false, true).GetString(bytes), new UTF8Encoding(false));
+        }
+        catch (DecoderFallbackException)
+        {
+            var ansi = Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.ANSICodePage,
+                EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+            string text = ansi.GetString(bytes);
+            if (!ansi.GetBytes(text).AsSpan().SequenceEqual(bytes))
+                throw new InvalidDataException($"BMS 인코딩을 판별할 수 없어 손상 방지를 위해 수정하지 않았습니다 (UTF-8/{ansi.WebName} 아님).");
+            return (text, ansi);
+        }
+    }
+
+    private static byte[] Encode(string text, Encoding encoding)
+    {
+        byte[] body = encoding.GetBytes(text);
+        byte[] preamble = encoding.GetPreamble();
+        return preamble.Length == 0 ? body : [.. preamble, .. body];
     }
 }

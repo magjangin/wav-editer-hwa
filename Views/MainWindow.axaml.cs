@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using Avalonia.Controls;
@@ -18,108 +17,67 @@ public partial class MainWindow : Window
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
     }
 
+    private MainViewModel? ViewModel => DataContext as MainViewModel;
+
+    private static List<string> ToLocalPaths(IEnumerable<IStorageItem>? items)
+        => items?
+            .Select(item => item.TryGetLocalPath())
+            .OfType<string>()
+            .Where(path => path.Length > 0)
+            .ToList() ?? [];
+
+    private void AddItems(IEnumerable<IStorageItem>? items)
+    {
+        var paths = ToLocalPaths(items);
+        if (paths.Count > 0) ViewModel?.AddPaths(paths);
+    }
+
     private void OnDragOver(object? sender, DragEventArgs e)
     {
         var files = e.DataTransfer.TryGetFiles();
-        if (files != null && files.Length > 0)
-        {
-            e.DragEffects = DragDropEffects.Copy;
-        }
-        else
-        {
-            e.DragEffects = DragDropEffects.None;
-        }
+        e.DragEffects = files is { Length: > 0 } ? DragDropEffects.Copy : DragDropEffects.None;
     }
 
-    private void OnDrop(object? sender, DragEventArgs e)
-    {
-        var files = e.DataTransfer.TryGetFiles();
-        if (files == null || files.Length == 0) return;
-
-        var paths = new List<string>();
-        foreach (var file in files)
-        {
-            var localPath = file.TryGetLocalPath();
-            if (!string.IsNullOrEmpty(localPath))
-            {
-                paths.Add(localPath);
-            }
-        }
-
-        if (paths.Count > 0 && DataContext is MainViewModel vm)
-        {
-            vm.AddPaths(paths);
-        }
-    }
+    private void OnDrop(object? sender, DragEventArgs e) => AddItems(e.DataTransfer.TryGetFiles());
 
     private async void OnAddFilesClicked(object? sender, RoutedEventArgs e)
     {
-        if (DataContext is not MainViewModel vm) return;
+        if (ViewModel == null) return;
 
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        AddItems(await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "이름을 바꿀 파일 선택",
             AllowMultiple = true
-        });
-
-        if (files.Count > 0)
-        {
-            var paths = files
-                .Select(f => f.TryGetLocalPath())
-                .OfType<string>()
-                .Where(p => !string.IsNullOrEmpty(p));
-            vm.AddPaths(paths);
-        }
+        }));
     }
 
     private async void OnAddFolderClicked(object? sender, RoutedEventArgs e)
     {
-        if (DataContext is not MainViewModel vm) return;
+        if (ViewModel == null) return;
 
-        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        AddItems(await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
         {
             Title = "이름을 바꿀 폴더 선택",
             AllowMultiple = true
-        });
-
-        if (folders.Count > 0)
-        {
-            var paths = folders
-                .Select(f => f.TryGetLocalPath())
-                .OfType<string>()
-                .Where(p => !string.IsNullOrEmpty(p));
-            vm.AddPaths(paths);
-        }
+        }));
     }
 
     private async void OnSelectBmsClicked(object? sender, RoutedEventArgs e)
     {
-        if (DataContext is not MainViewModel vm) return;
+        if (ViewModel is not { } vm) return;
 
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "연동할 BMS 차트 파일 선택",
             AllowMultiple = false,
-            FileTypeFilter = new[]
-            {
-                new FilePickerFileType("BMS 차트 파일 (*.bms)")
-                {
-                    Patterns = new[] { "*.bms" }
-                },
-                new FilePickerFileType("모든 파일 (*.*)")
-                {
-                    Patterns = new[] { "*.*" }
-                }
-            }
+            FileTypeFilter =
+            [
+                new FilePickerFileType("BMS 차트 파일 (*.bms)") { Patterns = ["*.bms"] },
+                new FilePickerFileType("모든 파일 (*.*)") { Patterns = ["*.*"] }
+            ]
         });
 
-        if (files.Count > 0)
-        {
-            var path = files[0].TryGetLocalPath();
-            if (!string.IsNullOrEmpty(path))
-            {
-                vm.DetectedBmsPath = path;
-            }
-        }
+        var path = ToLocalPaths(files).FirstOrDefault();
+        if (path != null) vm.DetectedBmsPath = path;
     }
 }
