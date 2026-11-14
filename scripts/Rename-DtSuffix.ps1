@@ -49,11 +49,11 @@ $targets = @(foreach ($dir in $dirs) {
         Where-Object { $_.Name -match $fromSuffixRegex -and $_.Name -match $NamePattern }
 })
 
-$plans = foreach ($file in $targets) {
+$plans = @(foreach ($file in $targets) {
     $dest = Join-Path $file.DirectoryName ($file.Name -replace $fromSuffixRegex, $toSuffix)
     if (Test-Path -LiteralPath $dest) { throw "대상 파일이 이미 존재합니다 (중단): $dest" }
     [pscustomobject]@{ Source = $file.FullName; Dest = $dest }
-}
+})
 
 Write-Host "대상 폴더 $($dirs.Count)개, dt$From -> dt$To 대상 WAV $($targets.Count)개"
 
@@ -101,7 +101,14 @@ if ($state.Count -gt 0 -and $PSCmdlet.ShouldProcess($bmsPath, "Update $($state.C
     $backupPath = "$bmsPath.$BackupTag.bak"
     Copy-Item -LiteralPath $bmsPath -Destination $backupPath -Force
     $body = $encoding.GetBytes($updated)
-    $out = if ($hasBom) { [byte[]](0xEF, 0xBB, 0xBF) + $body } else { $body }
-    [System.IO.File]::WriteAllBytes($bmsPath, [byte[]]$out)
+    $preamble = $encoding.GetPreamble()
+    if ($preamble.Length -gt 0) {
+        $out = New-Object byte[] ($preamble.Length + $body.Length)
+        [System.Buffer]::BlockCopy($preamble, 0, $out, 0, $preamble.Length)
+        [System.Buffer]::BlockCopy($body, 0, $out, $preamble.Length, $body.Length)
+    } else {
+        $out = $body
+    }
+    [System.IO.File]::WriteAllBytes($bmsPath, $out)
     Write-Host "BMS 갱신 완료 (백업: $backupPath)"
 }

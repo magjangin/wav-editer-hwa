@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $root = "H:\muse dash hwa\hwa\Star Trace"
 $bmsPath = Join-Path $root "hwa2.bms"

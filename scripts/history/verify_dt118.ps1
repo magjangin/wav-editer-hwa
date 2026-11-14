@@ -1,4 +1,4 @@
-$root = "H:\muse dash hwa\hwa\Star Trace"
+﻿$root = "H:\muse dash hwa\hwa\Star Trace"
 $s3Dirs = Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -like "*스피드3*" }
 $f118Total = 0
 $f116Total = 0

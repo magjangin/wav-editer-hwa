@@ -15,6 +15,7 @@ public sealed class RenameEngine
 {
     // 파국적 백트래킹 패턴이 UI 스레드를 멈추지 않도록 항목당 매치 시간을 제한한다.
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+    private static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
 
     private readonly RenameOptions _options;
     private readonly Regex? _regex;
@@ -79,13 +80,26 @@ public sealed class RenameEngine
 
         target = ApplyFormatting(target, _options.Formatting);
 
-        return scope switch
+        string result = scope switch
         {
             RenameScope.ExtensionOnly => stem + target,
             RenameScope.NameOnly => target + extension,
             _ => target
         };
+
+        if (!string.Equals(result, originalFullName, StringComparison.Ordinal) && !IsValidFileName(result))
+        {
+            errorMessage = "파일 이름에 사용할 수 없는 문자가 포함되어 있거나 이름이 비어 있습니다.";
+            return originalFullName;
+        }
+
+        return result;
     }
+
+    private static bool IsValidFileName(string name)
+        => !string.IsNullOrWhiteSpace(name)
+           && name is not ("." or "..")
+           && name.IndexOfAny(InvalidFileNameChars) < 0;
 
     private string Replace(string target)
     {
@@ -149,7 +163,8 @@ public sealed class RenameEngine
         if (nextMatch < 0)
             return text;
 
-        var sb = new StringBuilder(text.Length);
+        int estimatedCapacity = Math.Max(text.Length, text.Length + (replace.Length - search.Length) * 2);
+        var sb = new StringBuilder(estimatedCapacity);
         int pos = 0;
         while (nextMatch >= 0)
         {

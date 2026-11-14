@@ -31,9 +31,15 @@ public partial class MainViewModel : ViewModelBase
     private bool _matchCase = false;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedScopeIndex))]
     private RenameScope _selectedScope = RenameScope.NameAndExtension;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(
+        nameof(IsLowercaseFormatting),
+        nameof(IsUppercaseFormatting),
+        nameof(IsTitleCaseFormatting),
+        nameof(IsSentenceCaseFormatting))]
     private TextFormatting _selectedFormatting = TextFormatting.None;
 
     [ObservableProperty]
@@ -58,8 +64,8 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private string _filterText = string.Empty;
 
-    [ObservableProperty]
     private bool _isAllSelected = true;
+    private bool _suppressAllSelectedChanged;
 
     [ObservableProperty]
     private string? _globalErrorMessage;
@@ -77,16 +83,45 @@ public partial class MainViewModel : ViewModelBase
     private ObservableCollection<RenameItemViewModel> _displayItems = [];
 
     private readonly Stack<UndoEntry> _undoHistory = new();
+    private readonly HashSet<string> _sourceDirectories = new(StringComparer.OrdinalIgnoreCase);
 
     // 대량 추가/선택 변경 중에는 항목별 재계산을 막고 끝에서 한 번만 수행한다.
     private bool _isBatchUpdating;
+    private int _originalCount;
+    private int _renamedCount;
+    private int _wavFileCount;
 
     private sealed record UndoEntry(List<RenamedPath> Files, string? BmsPath, byte[]? BmsBackup);
 
-    public int OriginalCount => AllItems.Count;
-    public int RenamedCount => AllItems.Count(x => x.IsSelected && x.IsModified);
-    public int WavFileCount => AllItems.Count(x => x.IsWavFile);
+    public int OriginalCount => _originalCount;
+    public int RenamedCount => _renamedCount;
+    public int WavFileCount => _wavFileCount;
     public bool CanUndo => _undoHistory.Count > 0;
+
+    public bool IsAllSelected
+    {
+        get => _isAllSelected;
+        set
+        {
+            if (SetProperty(ref _isAllSelected, value) && !_suppressAllSelectedChanged)
+                SetAllSelected(value);
+        }
+    }
+
+    public int SelectedScopeIndex
+    {
+        get => (int)SelectedScope;
+        set
+        {
+            if (Enum.IsDefined(typeof(RenameScope), value))
+                SelectedScope = (RenameScope)value;
+        }
+    }
+
+    public bool IsLowercaseFormatting => SelectedFormatting == TextFormatting.Lowercase;
+    public bool IsUppercaseFormatting => SelectedFormatting == TextFormatting.Uppercase;
+    public bool IsTitleCaseFormatting => SelectedFormatting == TextFormatting.TitleCase;
+    public bool IsSentenceCaseFormatting => SelectedFormatting == TextFormatting.SentenceCase;
 
     public bool HasDetectedBms => !string.IsNullOrEmpty(DetectedBmsPath) && File.Exists(DetectedBmsPath);
     public string DetectedBmsName => string.IsNullOrEmpty(DetectedBmsPath) ? "없음" : Path.GetFileName(DetectedBmsPath);
@@ -105,19 +140,10 @@ public partial class MainViewModel : ViewModelBase
     partial void OnSelectedFormattingChanged(TextFormatting value) => RefreshPreview();
     partial void OnFilterTextChanged(string value) => FilterList();
 
-    partial void OnOnlyWavFilesChanged(bool value)
-    {
-        if (value) SelectOnlyWavFiles();
-    }
-
-    partial void OnIsAllSelectedChanged(bool value)
-    {
-        RunBatch(() =>
-        {
-            foreach (var item in AllItems) item.IsSelected = value;
-        });
-        OnSelectionChanged();
-    }
+    partial void OnIncludeFilesChanged(bool value) => SyncItemsWithInclusionOptions();
+    partial void OnIncludeFoldersChanged(bool value) => SyncItemsWithInclusionOptions();
+    partial void OnIncludeSubfoldersChanged(bool value) => SyncItemsWithInclusionOptions();
+    partial void OnOnlyWavFilesChanged(bool value) => SyncItemsWithInclusionOptions();
 
     private void OnAllItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -151,6 +177,26 @@ public partial class MainViewModel : ViewModelBase
     {
         CheckConflicts();
         UpdateCounts();
+        SyncIsAllSelected();
+    }
+
+    private void SyncIsAllSelected()
+    {
+        bool allSelected = AllItems.Count > 0 && AllItems.All(x => x.IsSelected);
+        if (_isAllSelected == allSelected) return;
+
+        _suppressAllSelectedChanged = true;
+        try { IsAllSelected = allSelected; }
+        finally { _suppressAllSelectedChanged = false; }
+    }
+
+    private void SetAllSelected(bool value)
+    {
+        RunBatch(() =>
+        {
+            foreach (var item in AllItems) item.IsSelected = value;
+        });
+        OnSelectionChanged();
     }
 
     private void RunBatch(Action action)
@@ -191,12 +237,6 @@ public partial class MainViewModel : ViewModelBase
             }
         }
 
-        void Add(string path, bool isDirectory)
-        {
-            if (existingPaths.Add(path))
-                AllItems.Add(new RenameItemViewModel(path, isDirectory));
-        }
-
         RunBatch(() =>
         {
             foreach (var path in pathList)
@@ -210,43 +250,114 @@ public partial class MainViewModel : ViewModelBase
                         continue;
                     }
 
-                    if (ShouldIncludeFile(path)) Add(path, false);
+                    if (ShouldIncludeFile(path) && existingPaths.Add(path))
+                        AllItems.Add(new RenameItemViewModel(path, false));
                 }
                 else if (Directory.Exists(path))
                 {
-                    if (IncludeFolders) Add(path, true);
-
-                    try
-                    {
-                        var searchOption = IncludeSubfolders ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-
-                        if (IncludeFiles)
-                        {
-                            var pattern = OnlyWavFiles ? "*.wav" : "*";
-                            foreach (var subFile in Directory.EnumerateFiles(path, pattern, searchOption))
-                            {
-                                if (ShouldIncludeFile(subFile)) Add(subFile, false);
-                            }
-                        }
-
-                        if (IncludeFolders && IncludeSubfolders)
-                        {
-                            foreach (var subDir in Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories))
-                            {
-                                Add(subDir, true);
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        StatusMessage = $"폴더 탐색 중 오류: {ex.Message}";
-                    }
+                    string cleanDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+                    _sourceDirectories.Add(cleanDir);
+                    AddDirectoryContents(cleanDir, existingPaths);
                 }
             }
         });
 
         RefreshPreview();
         FilterList();
+        SyncIsAllSelected();
+    }
+
+    private void AddDirectoryContents(string dirPath, HashSet<string> existingPaths)
+    {
+        void Add(string itemPath, bool isDirectory)
+        {
+            if (existingPaths.Add(itemPath))
+                AllItems.Add(new RenameItemViewModel(itemPath, isDirectory));
+        }
+
+        if (IncludeFolders) Add(dirPath, true);
+
+        try
+        {
+            var searchOption = IncludeSubfolders ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+
+            if (IncludeFiles)
+            {
+                var pattern = OnlyWavFiles ? "*.wav" : "*";
+                foreach (var subFile in Directory.EnumerateFiles(dirPath, pattern, searchOption))
+                {
+                    if (ShouldIncludeFile(subFile)) Add(subFile, false);
+                }
+            }
+
+            if (IncludeFolders && IncludeSubfolders)
+            {
+                foreach (var subDir in Directory.EnumerateDirectories(dirPath, "*", SearchOption.AllDirectories))
+                {
+                    Add(subDir, true);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"폴더 탐색 중 오류: {ex.Message}";
+        }
+    }
+
+    private void SyncItemsWithInclusionOptions()
+    {
+        if (AllItems.Count == 0 && _sourceDirectories.Count == 0)
+            return;
+
+        if (_sourceDirectories.Count > 0)
+        {
+            var existingPaths = new HashSet<string>(AllItems.Select(x => x.FullPath), StringComparer.OrdinalIgnoreCase);
+            RunBatch(() =>
+            {
+                foreach (var dir in _sourceDirectories)
+                {
+                    if (Directory.Exists(dir))
+                        AddDirectoryContents(dir, existingPaths);
+                }
+            });
+        }
+
+        RunBatch(() =>
+        {
+            foreach (var item in AllItems)
+                item.IsSelected = ShouldSelectItemByOptions(item);
+        });
+
+        RefreshPreview();
+        FilterList();
+        SyncIsAllSelected();
+    }
+
+    private bool ShouldSelectItemByOptions(RenameItemViewModel item)
+    {
+        if (item.IsDirectory)
+        {
+            if (!IncludeFolders) return false;
+            return IncludeSubfolders || !IsStrictSubdirectoryOfSource(item.FullPath);
+        }
+
+        if (!IncludeFiles) return false;
+        if (OnlyWavFiles && !item.IsWavFile) return false;
+        return IncludeSubfolders || !IsStrictSubdirectoryOfSource(item.DirectoryPath);
+    }
+
+    private bool IsStrictSubdirectoryOfSource(string dirPath)
+    {
+        if (_sourceDirectories.Count == 0) return false;
+        string clean = Path.TrimEndingDirectorySeparator(dirPath);
+        if (_sourceDirectories.Contains(clean)) return false;
+
+        foreach (var srcDir in _sourceDirectories)
+        {
+            if (clean.StartsWith(srcDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     private bool ShouldIncludeFile(string filePath)
@@ -268,14 +379,34 @@ public partial class MainViewModel : ViewModelBase
     [RelayCommand]
     public void RemoveNonWavFiles()
     {
-        var nonWav = AllItems.Where(x => !x.IsWavFile).ToList();
+        var wavItems = new List<RenameItemViewModel>(AllItems.Count);
+        int removedCount = 0;
+
+        foreach (var item in AllItems)
+        {
+            item.PropertyChanged -= OnItemPropertyChanged;
+            if (item.IsWavFile)
+                wavItems.Add(item);
+            else
+                removedCount++;
+        }
+
+        if (removedCount == 0)
+        {
+            StatusMessage = "제거할 비-WAV 항목이 없습니다.";
+            return;
+        }
+
         RunBatch(() =>
         {
-            foreach (var item in nonWav) AllItems.Remove(item);
+            AllItems.Clear();
+            foreach (var item in wavItems) AllItems.Add(item);
         });
+
         RefreshPreview();
         FilterList();
-        StatusMessage = $"{nonWav.Count}개의 비-WAV 항목을 목록에서 제거했습니다.";
+        SyncIsAllSelected();
+        StatusMessage = $"{removedCount}개의 비-WAV 항목을 목록에서 제거했습니다.";
     }
 
     [RelayCommand]
@@ -283,12 +414,21 @@ public partial class MainViewModel : ViewModelBase
     {
         AllItems.Remove(item);
         RefreshPreview();
+        SyncIsAllSelected();
     }
 
     [RelayCommand]
     public void ClearAll()
     {
-        AllItems.Clear();
+        foreach (var item in AllItems)
+            item.PropertyChanged -= OnItemPropertyChanged;
+
+        RunBatch(() => AllItems.Clear());
+        _sourceDirectories.Clear();
+        DisplayItems = [];
+        GlobalErrorMessage = null;
+        OnSelectionChanged();
+        StatusMessage = "목록을 비웠습니다.";
     }
 
     [RelayCommand]
@@ -298,16 +438,10 @@ public partial class MainViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    public void SelectAll()
-    {
-        IsAllSelected = true;
-    }
+    public void SelectAll() => SetAllSelected(true);
 
     [RelayCommand]
-    public void DeselectAll()
-    {
-        IsAllSelected = false;
-    }
+    public void DeselectAll() => SetAllSelected(false);
 
     private RenameOptions CurrentOptions => new(
         SearchText, ReplaceText, UseRegex, MatchAll, MatchCase, SelectedScope, SelectedFormatting);
@@ -330,18 +464,47 @@ public partial class MainViewModel : ViewModelBase
         UpdateCounts();
     }
 
+    private sealed class DirectoryAndNameComparer : IEqualityComparer<(string Dir, string Name)>
+    {
+        public static readonly DirectoryAndNameComparer Instance = new();
+
+        public bool Equals((string Dir, string Name) x, (string Dir, string Name) y)
+            => string.Equals(x.Dir, y.Dir, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(x.Name, y.Name, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string Dir, string Name) obj)
+            => HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Dir),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Name));
+    }
+
     private void CheckConflicts()
     {
-        var conflicted = AllItems
-            .Where(x => x.IsSelected && x.IsModified)
-            .GroupBy(x => x.TargetPath, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Skip(1).Any())
-            .SelectMany(g => g)
-            .ToHashSet();
+        var stationarySet = new HashSet<(string Dir, string Name)>(DirectoryAndNameComparer.Instance);
+        var targetCounts = new Dictionary<(string Dir, string Name), int>(DirectoryAndNameComparer.Instance);
 
         foreach (var item in AllItems)
         {
-            bool hasConflict = conflicted.Contains(item);
+            if (item.IsSelected && item.IsModified)
+            {
+                var key = (item.DirectoryPath, item.NewName);
+                targetCounts[key] = targetCounts.TryGetValue(key, out int count) ? count + 1 : 1;
+            }
+            else
+            {
+                stationarySet.Add((item.DirectoryPath, item.OriginalName));
+            }
+        }
+
+        foreach (var item in AllItems)
+        {
+            bool hasConflict = false;
+            if (item.IsSelected && item.IsModified)
+            {
+                var key = (item.DirectoryPath, item.NewName);
+                hasConflict = targetCounts.GetValueOrDefault(key) > 1 || stationarySet.Contains(key);
+            }
+
             item.HasConflict = hasConflict;
             item.Status = hasConflict ? RenameStatus.Conflict : RenameStatus.Pending;
             item.StatusMessage = hasConflict ? "중복된 대상 파일명이 존재합니다." : null;
@@ -360,14 +523,33 @@ public partial class MainViewModel : ViewModelBase
 
     private void UpdateCounts()
     {
-        OnPropertyChanged(nameof(OriginalCount));
-        OnPropertyChanged(nameof(RenamedCount));
-        OnPropertyChanged(nameof(WavFileCount));
+        int original = AllItems.Count;
+        int renamed = 0;
+        int wav = 0;
+        foreach (var item in AllItems)
+        {
+            if (item.IsSelected && item.IsModified) renamed++;
+            if (item.IsWavFile) wav++;
+        }
+
+        if (_originalCount != original)
+        {
+            _originalCount = original;
+            OnPropertyChanged(nameof(OriginalCount));
+        }
+        if (_renamedCount != renamed)
+        {
+            _renamedCount = renamed;
+            OnPropertyChanged(nameof(RenamedCount));
+        }
+        if (_wavFileCount != wav)
+        {
+            _wavFileCount = wav;
+            OnPropertyChanged(nameof(WavFileCount));
+        }
     }
 
     private sealed record MovePlan(RenameItemViewModel Item, string OldPath, string NewPath, bool IsDirectory);
-
-    private sealed record MoveResult(MovePlan Plan, string? Error);
 
     [RelayCommand]
     public async Task ApplyRenameAsync()
@@ -397,40 +579,35 @@ public partial class MainViewModel : ViewModelBase
                 try { backup = File.ReadAllBytes(bmsPath); } catch { /* 실행 취소 시 BMS 복구만 생략 */ }
             }
 
-            var moveResults = new List<MoveResult>(plans.Count);
-            foreach (var plan in plans)
-            {
-                try
-                {
-                    FileRenamer.Move(plan.OldPath, plan.NewPath, plan.IsDirectory);
-                    moveResults.Add(new MoveResult(plan, null));
-                }
-                catch (Exception ex)
-                {
-                    moveResults.Add(new MoveResult(plan, ex.Message));
-                }
-            }
+            var batchResults = FileRenamer.MoveBatch(plans.Select(ToRenamedPath).ToList());
 
             // BMS에는 디스크에서 실제로 성공한 변경만 반영한다.
             int synced = 0;
             string? syncError = null;
-            var succeeded = moveResults.Where(r => r.Error == null).Select(r => ToRenamedPath(r.Plan)).ToList();
+            var succeeded = batchResults.Where(r => r.Error == null).Select(r => r.Plan).ToList();
             if (bmsPath != null && succeeded.Count > 0)
             {
                 synced = BmsSyncService.SyncBmsFile(bmsPath, succeeded, out syncError);
             }
 
-            return (moveResults, backup, synced, syncError);
+            return (batchResults, backup, synced, syncError);
         });
 
         var history = new List<RenamedPath>();
-        foreach (var (plan, error) in results)
+        var failures = new List<(MovePlan Plan, string Error)>();
+        for (int i = 0; i < plans.Count; i++)
         {
+            var plan = plans[i];
+            var error = results[i].Error;
             if (error == null)
             {
                 plan.Item.MarkMovedTo(plan.NewPath);
                 if (plan.IsDirectory) RebaseChildren(plan.OldPath, plan.NewPath);
-                history.Add(ToRenamedPath(plan));
+                history.Add(results[i].Plan);
+            }
+            else
+            {
+                failures.Add((plan, error));
             }
         }
 
@@ -443,7 +620,6 @@ public partial class MainViewModel : ViewModelBase
         RefreshPreview();
 
         // RefreshPreview가 상태를 초기화하므로 실패 표시는 그 뒤에 남긴다.
-        var failures = results.Where(r => r.Error != null).ToList();
         foreach (var (plan, error) in failures)
         {
             plan.Item.Status = RenameStatus.Error;
@@ -461,14 +637,29 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>폴더 이름이 바뀐 뒤, 그 아래에 있던 목록 항목들의 경로를 새 폴더 기준으로 고친다.</summary>
     private void RebaseChildren(string oldDir, string newDir)
     {
-        string oldPrefix = Path.TrimEndingDirectorySeparator(oldDir) + Path.DirectorySeparatorChar;
+        string oldClean = Path.TrimEndingDirectorySeparator(oldDir);
+        string newClean = Path.TrimEndingDirectorySeparator(newDir);
+        string oldPrefix = oldClean + Path.DirectorySeparatorChar;
+
         foreach (var item in AllItems)
         {
             if (item.FullPath.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
             {
-                item.FullPath = Path.Combine(newDir, item.FullPath[oldPrefix.Length..]);
+                item.FullPath = Path.Combine(newClean, item.FullPath[oldPrefix.Length..]);
                 item.DirectoryPath = Path.GetDirectoryName(item.FullPath) ?? item.DirectoryPath;
             }
+        }
+
+        if (_sourceDirectories.Remove(oldClean))
+            _sourceDirectories.Add(newClean);
+
+        var nestedSources = _sourceDirectories
+            .Where(s => s.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        foreach (var s in nestedSources)
+        {
+            _sourceDirectories.Remove(s);
+            _sourceDirectories.Add(Path.Combine(newClean, s[oldPrefix.Length..]));
         }
     }
 
@@ -484,21 +675,19 @@ public partial class MainViewModel : ViewModelBase
         var reversed = Enumerable.Reverse(entry.Files).ToList();
         var (restored, failCount) = await Task.Run(() =>
         {
-            var ok = new List<RenamedPath>();
+            var undoPlans = reversed
+                .Select(r => new RenamedPath(r.NewPath, r.OldPath, r.IsDirectory))
+                .ToList();
+
+            var batchResults = FileRenamer.MoveBatch(undoPlans);
+            var ok = new List<RenamedPath>(batchResults.Count);
             int failed = 0;
-            foreach (var rename in reversed)
+            for (int i = 0; i < batchResults.Count; i++)
             {
-                bool exists = rename.IsDirectory ? Directory.Exists(rename.NewPath) : File.Exists(rename.NewPath);
-                if (!exists) { failed++; continue; }
-                try
-                {
-                    FileRenamer.Move(rename.NewPath, rename.OldPath, rename.IsDirectory);
-                    ok.Add(rename);
-                }
-                catch
-                {
+                if (batchResults[i].Error == null)
+                    ok.Add(reversed[i]);
+                else
                     failed++;
-                }
             }
 
             // BMS는 동기화 직전의 원본 바이트로 복구 (인코딩·BOM 보존)

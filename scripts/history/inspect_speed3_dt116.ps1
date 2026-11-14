@@ -1,4 +1,4 @@
-$root = "H:\muse dash hwa\hwa\Star Trace"
+﻿$root = "H:\muse dash hwa\hwa\Star Trace"
 $s3Dirs = Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -like "*스피드3*" }
 Write-Host "Found Speed 3 directories: $($s3Dirs.Count)"
 foreach ($d in $s3Dirs) {

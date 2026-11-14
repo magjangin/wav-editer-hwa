@@ -25,19 +25,37 @@ public static class BmsSyncService
 
     /// <summary>
     /// 지정된 경로(파일이면 그 폴더)와 상위 폴더에서 .bms 파일을 자동 탐색합니다.
+    /// 같은 폴더에 파일이 수천 개 들어와도 폴더별로 한 번씩만 검사합니다.
     /// </summary>
     public static string? DetectBmsFile(IEnumerable<string> paths)
     {
-        var directories = paths
-            .Select(p => File.Exists(p) ? Path.GetDirectoryName(p) : (Directory.Exists(p) ? p : null))
-            .OfType<string>()
-            .Where(d => d.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var candidateDirs = new List<string>();
+        var seenCandidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var dir in directories)
+        foreach (var path in paths)
         {
-            var found = FirstBmsIn(dir) ?? (Directory.GetParent(dir) is { Exists: true } parent ? FirstBmsIn(parent.FullName) : null);
-            if (found != null) return found;
+            if (string.IsNullOrWhiteSpace(path)) continue;
+
+            // 디렉토리인지 확인하기 전에 이미 부모 경로로 추가된 일반 파일은 건너뛰어 I/O 호출을 줄인다.
+            string? dir = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir) && seenCandidates.Add(dir))
+                candidateDirs.Add(dir);
+        }
+
+        var scannedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var dir in candidateDirs)
+        {
+            if (scannedDirs.Add(dir))
+            {
+                var found = FirstBmsIn(dir);
+                if (found != null) return found;
+            }
+
+            if (Directory.GetParent(dir) is { Exists: true } parent && scannedDirs.Add(parent.FullName))
+            {
+                var found = FirstBmsIn(parent.FullName);
+                if (found != null) return found;
+            }
         }
 
         return null;
@@ -70,8 +88,8 @@ public static class BmsSyncService
 
         try
         {
-            var (nameMap, relativeMap) = BuildMaps(bmsFilePath, renames);
-            if (nameMap.Count == 0) return 0;
+            var (nameMap, relativeMap, dirLeafMap, bmsDir) = BuildMaps(bmsFilePath, renames);
+            if (nameMap.Count == 0 && relativeMap.Count == 0 && dirLeafMap.Count == 0) return 0;
 
             byte[] original = File.ReadAllBytes(bmsFilePath);
             var (text, encoding) = ReadText(original);
@@ -80,20 +98,9 @@ public static class BmsSyncService
             string updated = WavDefinitionRegex.Replace(text, m =>
             {
                 string wavPath = m.Groups[2].Value;
-                string? newPath = null;
+                string newPath = ResolveUpdatedWavPath(wavPath, bmsDir, nameMap, relativeMap, dirLeafMap);
 
-                // 1. 상대경로 매칭 우선
-                if (relativeMap.TryGetValue(wavPath, out var newRel))
-                {
-                    newPath = newRel;
-                }
-                // 2. 파일명 매칭 (BMS 안의 폴더 부분과 구분자는 원문 그대로 유지)
-                else if (nameMap.TryGetValue(GetFileName(wavPath), out var newFileName))
-                {
-                    newPath = wavPath[..^GetFileName(wavPath).Length] + newFileName;
-                }
-
-                if (newPath == null || newPath == wavPath) return m.Value;
+                if (string.Equals(newPath, wavPath, StringComparison.Ordinal)) return m.Value;
                 replacedCount++;
                 return m.Groups[1].Value + newPath;
             });
@@ -113,34 +120,154 @@ public static class BmsSyncService
         }
     }
 
-    private static (Dictionary<string, string> nameMap, Dictionary<string, string> relativeMap) BuildMaps(
-        string bmsFilePath, IEnumerable<RenamedPath> renames)
+    private static string ResolveUpdatedWavPath(
+        string wavPath,
+        string bmsDir,
+        Dictionary<string, string> nameMap,
+        Dictionary<string, string> relativeMap,
+        Dictionary<string, string> dirLeafMap)
+    {
+        // 1. 폴더 이름 변경이 있으면 각 경로 세그먼트를 원래 구분자를 유지한 채 갱신한다.
+        string afterDir = RewriteDirectorySegments(wavPath, dirLeafMap, out bool dirChanged);
+
+        // 2. 상대경로 매칭 우선 (폴더도 함께 바뀐 경우 afterDir의 폴더에 새 파일명을 결합)
+        if (relativeMap.TryGetValue(wavPath, out var newRel))
+            return dirChanged ? ReplaceFileName(afterDir, GetFileName(newRel)) : newRel;
+
+        // 3. 파일명 매칭 폴백: 다른 씬 폴더의 파일이 디스크에 그대로 존재하면 동명 파일 오매칭을 막는다.
+        string fileName = GetFileName(afterDir);
+        if (nameMap.TryGetValue(fileName, out var newFileName))
+        {
+            bool hasDir = afterDir.IndexOfAny(['\\', '/']) >= 0;
+            if (!hasDir || !File.Exists(ToDiskPath(bmsDir, afterDir)))
+                return ReplaceFileName(afterDir, newFileName);
+        }
+
+        return afterDir;
+    }
+
+    private static (
+        Dictionary<string, string> nameMap,
+        Dictionary<string, string> relativeMap,
+        Dictionary<string, string> dirLeafMap,
+        string bmsDir) BuildMaps(string bmsFilePath, IEnumerable<RenamedPath> renames)
     {
         string bmsDir = Path.GetDirectoryName(Path.GetFullPath(bmsFilePath)) ?? string.Empty;
         var nameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var ambiguousNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var relativeMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var dirLeafMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (oldPath, newPath, isDirectory) in renames)
         {
-            if (isDirectory) continue;
-
-            string oldName = Path.GetFileName(oldPath);
-            string newName = Path.GetFileName(newPath);
-            if (string.Equals(oldName, newName, StringComparison.Ordinal)) continue;
-
-            nameMap[oldName] = newName;
+            string oldFull = Path.GetFullPath(oldPath);
+            string newFull = Path.GetFullPath(newPath);
+            string oldRel = Path.GetRelativePath(bmsDir, oldFull);
 
             // BMS 폴더 하위인지 경로 경계 기준으로 판정 ("C:\foo"가 "C:\foobar"를 포함한다고 보지 않음)
-            string oldRel = Path.GetRelativePath(bmsDir, Path.GetFullPath(oldPath));
-            if (oldRel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(oldRel)) continue;
+            bool isUnderBmsDir = !oldRel.StartsWith("..", StringComparison.Ordinal)
+                                 && !Path.IsPathRooted(oldRel)
+                                 && oldRel != ".";
 
-            string newRel = Path.Combine(Path.GetDirectoryName(oldRel) ?? string.Empty, newName);
-            relativeMap[oldRel.Replace('/', '\\')] = newRel.Replace('/', '\\');
-            relativeMap[oldRel.Replace('\\', '/')] = newRel.Replace('\\', '/');
+            if (isDirectory)
+            {
+                if (!isUnderBmsDir) continue;
+                string newRel = Path.GetRelativePath(bmsDir, newFull);
+                if (newRel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(newRel)) continue;
+
+                string oldClean = Path.TrimEndingDirectorySeparator(oldRel).Replace('\\', '/');
+                string newLeaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(newFull));
+                if (!string.Equals(Path.GetFileName(oldClean), newLeaf, StringComparison.Ordinal))
+                    dirLeafMap[oldClean] = newLeaf;
+                continue;
+            }
+
+            string oldName = Path.GetFileName(oldFull);
+            string newName = Path.GetFileName(newFull);
+            if (!string.Equals(oldName, newName, StringComparison.Ordinal) && !ambiguousNames.Contains(oldName))
+            {
+                if (nameMap.TryGetValue(oldName, out var existingNewName))
+                {
+                    // 서로 다른 폴더의 동명 파일이 각기 다른 이름으로 바뀌었으면 파일명만으로는 모호하므로 제외한다.
+                    if (!string.Equals(existingNewName, newName, StringComparison.Ordinal))
+                    {
+                        nameMap.Remove(oldName);
+                        ambiguousNames.Add(oldName);
+                    }
+                }
+                else
+                {
+                    nameMap[oldName] = newName;
+                }
+            }
+
+            if (!isUnderBmsDir) continue;
+            string fileNewRel = Path.GetRelativePath(bmsDir, newFull);
+            if (fileNewRel.StartsWith("..", StringComparison.Ordinal)
+                || Path.IsPathRooted(fileNewRel)
+                || string.Equals(oldRel, fileNewRel, StringComparison.Ordinal))
+                continue;
+
+            relativeMap[oldRel.Replace('/', '\\')] = fileNewRel.Replace('/', '\\');
+            relativeMap[oldRel.Replace('\\', '/')] = fileNewRel.Replace('\\', '/');
         }
 
-        return (nameMap, relativeMap);
+        return (nameMap, relativeMap, dirLeafMap, bmsDir);
     }
+
+    private static string RewriteDirectorySegments(string wavPath, Dictionary<string, string> dirLeafMap, out bool dirChanged)
+    {
+        dirChanged = false;
+        if (dirLeafMap.Count == 0) return wavPath;
+
+        int lastSep = wavPath.LastIndexOfAny(['\\', '/']);
+        if (lastSep < 0) return wavPath;
+
+        var sb = new StringBuilder(wavPath.Length);
+        string cumulative = string.Empty;
+        int pos = 0;
+
+        while (pos <= lastSep)
+        {
+            int sep = wavPath.IndexOfAny(['\\', '/'], pos);
+            if (sep < 0 || sep > lastSep) break;
+
+            string seg = wavPath[pos..sep];
+            if (seg.Length > 0 && seg != ".")
+            {
+                cumulative = cumulative.Length == 0 ? seg : $"{cumulative}/{seg}";
+                if (dirLeafMap.TryGetValue(cumulative, out var newLeaf))
+                {
+                    sb.Append(newLeaf);
+                    dirChanged = true;
+                }
+                else
+                {
+                    sb.Append(seg);
+                }
+            }
+            else
+            {
+                sb.Append(seg);
+            }
+
+            sb.Append(wavPath[sep]);
+            pos = sep + 1;
+        }
+
+        if (!dirChanged) return wavPath;
+        sb.Append(wavPath, lastSep + 1, wavPath.Length - (lastSep + 1));
+        return sb.ToString();
+    }
+
+    private static string ReplaceFileName(string bmsPath, string newFileName)
+    {
+        int idx = bmsPath.LastIndexOfAny(['\\', '/']);
+        return idx < 0 ? newFileName : string.Concat(bmsPath.AsSpan(0, idx + 1), newFileName);
+    }
+
+    private static string ToDiskPath(string bmsDir, string bmsRelPath)
+        => Path.Combine(bmsDir, bmsRelPath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar));
 
     // BMS 경로는 OS와 무관하게 '\' 와 '/' 를 모두 구분자로 취급한다.
     private static string GetFileName(string bmsPath)

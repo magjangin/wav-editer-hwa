@@ -175,12 +175,21 @@ public static class McpTools
         {
             try
             {
+                string bmsDir = Path.GetDirectoryName(Path.GetFullPath(bmsFile)) ?? dir;
                 var bmsWavDefs = BmsSyncService.ReadWavDefinitions(bmsFile);
                 report["bms_wav_definitions_count"] = bmsWavDefs.Count;
 
                 var diskFileNames = new HashSet<string>(wavFiles.Select(f => Path.GetFileName(f)), StringComparer.OrdinalIgnoreCase);
                 var missingInDisk = bmsWavDefs
-                    .Where(w => !diskFileNames.Contains(w[(w.LastIndexOfAny(['\\', '/']) + 1)..]))
+                    .Where(w =>
+                    {
+                        if (w.IndexOfAny(['\\', '/']) >= 0)
+                        {
+                            string candidate = Path.Combine(bmsDir, w.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar));
+                            return !File.Exists(candidate);
+                        }
+                        return !diskFileNames.Contains(w);
+                    })
                     .ToList();
 
                 report["missing_wav_files_count"] = missingInDisk.Count;
@@ -285,27 +294,25 @@ public static class McpTools
         if (!applyToDisk)
             return Ok(result);
 
-        // 실제 디스크에 적용
+        // 실제 디스크에 적용 (연쇄/교환 리네임도 지원하도록 2단계 일괄 이동 사용)
         var succeeded = new List<RenamedPath>();
         var errors = new List<string>();
+        var batchInput = new List<RenamedPath>(plans.Count);
 
         foreach (var plan in plans)
         {
             if (conflicts.Contains(plan))
-            {
                 errors.Add($"{plan.OldName}: 다른 파일과 대상 이름이 겹쳐 건너뜀");
-                continue;
-            }
+            else
+                batchInput.Add(new RenamedPath(plan.OldPath, plan.NewPath, IsDirectory: false));
+        }
 
-            try
-            {
-                FileRenamer.Move(plan.OldPath, plan.NewPath, isDirectory: false);
-                succeeded.Add(new RenamedPath(plan.OldPath, plan.NewPath));
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"{plan.OldName}: {ex.Message}");
-            }
+        foreach (var res in FileRenamer.MoveBatch(batchInput))
+        {
+            if (res.Error == null)
+                succeeded.Add(res.Plan);
+            else
+                errors.Add($"{Path.GetFileName(res.Plan.OldPath)}: {res.Error}");
         }
 
         result["success_count"] = succeeded.Count;
@@ -340,9 +347,13 @@ public static class McpTools
             string newName = value is JsonValue v && v.TryGetValue<string>(out var s) ? s : string.Empty;
             if (string.IsNullOrWhiteSpace(newName)) continue;
 
-            // 키는 파일명 또는 BMS 기준 상대경로. 새 이름은 같은 폴더의 파일명으로 취급한다.
-            string oldFull = Path.Combine(bmsDir, oldName);
-            renames.Add(new RenamedPath(oldFull, Path.Combine(Path.GetDirectoryName(oldFull) ?? bmsDir, Path.GetFileName(newName))));
+            // 키는 파일명 또는 BMS 기준 상대경로. 새 이름에 경로 구분자가 있으면 BMS 기준 상대경로로, 없으면 같은 폴더 파일명으로 취급한다.
+            string normalizedOld = oldName.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+            string oldFull = Path.Combine(bmsDir, normalizedOld);
+            string newFull = newName.IndexOfAny(['\\', '/']) >= 0
+                ? Path.Combine(bmsDir, newName.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar))
+                : Path.Combine(Path.GetDirectoryName(oldFull) ?? bmsDir, newName);
+            renames.Add(new RenamedPath(oldFull, newFull));
         }
 
         int synced = BmsSyncService.SyncBmsFile(bmsPath, renames, out var err);

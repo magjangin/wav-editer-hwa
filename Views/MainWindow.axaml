@@ -62,7 +62,7 @@
                     <Grid ColumnDefinitions="*, Auto">
                         <ComboBox Grid.Column="0"
                                   HorizontalAlignment="Stretch"
-                                  SelectedIndex="{Binding SelectedScope, Mode=TwoWay}">
+                                  SelectedIndex="{Binding SelectedScopeIndex, Mode=TwoWay}">
                             <ComboBoxItem Content="파일 이름 + 확장명" />
                             <ComboBoxItem Content="파일 이름만" />
                             <ComboBoxItem Content="확장명만" />
@@ -381,13 +381,13 @@
                                                Foreground="{Binding ArrowColor}" />
 
                                     <!-- 4. 변경될 새 파일명 (1* 너비, 줄임표) -->
-                                    <Grid Grid.Column="4" ColumnDefinitions="*, Auto" VerticalAlignment="Center" Margin="8,0,0,0">
+                                    <Grid Grid.Column="4" ColumnDefinitions="*, Auto, Auto" VerticalAlignment="Center" Margin="8,0,0,0">
                                         <TextBlock Grid.Column="0"
                                                    Text="{Binding NewName}"
                                                    FontSize="13"
                                                    Foreground="{Binding NewNameColor}"
                                                    TextTrimming="CharacterEllipsis"
-                                                   ToolTip.Tip="{Binding NewName}" />
+                                                   ToolTip.Tip="{Binding NewNameTooltip}" />
 
                                         <!-- 충돌 배지 -->
                                         <Border Grid.Column="1"
@@ -397,6 +397,17 @@
                                                 Padding="4,1"
                                                 Margin="6,0,0,0">
                                             <TextBlock Text="충돌" FontSize="10" Foreground="#ff6666" />
+                                        </Border>
+
+                                        <!-- 오류 배지 -->
+                                        <Border Grid.Column="2"
+                                                IsVisible="{Binding HasError}"
+                                                Background="#552222"
+                                                CornerRadius="3"
+                                                Padding="4,1"
+                                                Margin="6,0,0,0"
+                                                ToolTip.Tip="{Binding StatusMessage}">
+                                            <TextBlock Text="오류" FontSize="10" Foreground="#ff6666" />
                                         </Border>
                                     </Grid>
 

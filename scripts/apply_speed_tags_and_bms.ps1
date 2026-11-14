@@ -1,11 +1,24 @@
+﻿<#
+.SYNOPSIS
+    스피드1~3 WAV 파일에 한국어 속도 태그를 부여하고 BMS 파일의 #WAV 정의를 스피드 2·3까지 확장합니다.
+#>
+[CmdletBinding(SupportsShouldProcess)]
+param(
+    [string]$Root = "H:\muse dash hwa\hwa\Star Trace",
+    [string]$BmsName = "hwa2.bms"
+)
+
 $ErrorActionPreference = "Stop"
 
-$root = "H:\muse dash hwa\hwa\Star Trace"
-$bmsPath = Join-Path $root "hwa2.bms"
+if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+    throw "루트 폴더가 없습니다: $Root"
+}
+
+$bmsPath = Join-Path $Root $BmsName
 
 Write-Host "=========================================================="
 Write-Host "Star Trace Speed Tagging & BMS #WAV Full Integration"
-Write-Host "Target Root: $root"
+Write-Host "Target Root: $Root"
 Write-Host "=========================================================="
 
 function Get-SpeedTaggedName($name, $speedNum) {
@@ -53,16 +66,18 @@ function ConvertFrom-Base36($str) {
 }
 
 # 1. 디스크 상의 모든 스피드 폴더 내 WAV 파일 리네임
-$speedDirs = Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -match '^(\d+)번 씬 스피드([123]) wav폴더$' } | Sort-Object { [int]($_.Name -replace '\D') }
+$speedDirs = @(Get-ChildItem -LiteralPath $Root -Directory |
+    Where-Object { $_.Name -match '^(\d+)번 씬 스피드([123]) wav폴더$' } |
+    Sort-Object { if ($_.Name -match '^(\d+)번 씬 스피드([123])') { [int]$Matches[1] * 10 + [int]$Matches[2] } else { 0 } })
 
 $fileRenameCount = 0
-$fileMapOldToNew = @{}
+$fileMapOldToNew = New-Object 'System.Collections.Generic.Dictionary[string, string]' ([System.StringComparer]::OrdinalIgnoreCase)
 
 foreach ($dir in $speedDirs) {
     $dir.Name -match '스피드([123])' | Out-Null
     $speedNum = [int]$Matches[1]
 
-    $files = Get-ChildItem -Path $dir.FullName -Filter "*.wav"
+    $files = @(Get-ChildItem -LiteralPath $dir.FullName -Filter "*.wav" -File)
     foreach ($file in $files) {
         $newName = Get-SpeedTaggedName $file.Name $speedNum
         if ($newName -ne $file.Name) {
@@ -73,7 +88,9 @@ foreach ($dir in $speedDirs) {
             $fileMapOldToNew[$relOld] = $relNew
             $fileMapOldToNew[$file.Name] = $newName
 
-            Move-Item -Path $file.FullName -Destination $destPath
+            if ($PSCmdlet.ShouldProcess($file.FullName, "Rename to $newName")) {
+                Move-Item -LiteralPath $file.FullName -Destination $destPath
+            }
             $fileRenameCount++
         }
     }
@@ -81,14 +98,16 @@ foreach ($dir in $speedDirs) {
 
 Write-Host "Renamed $fileRenameCount WAV files to include '스피드1~3' in Korean names."
 
-# 2. BMS 파일 업데이트 및 스피드 2, 3 신규 키음 추가
-if (Test-Path $bmsPath) {
+# 2. BMS 파일 업데이트 및 스피드 2, 3 신규 키음 추가 (BOM·줄바꿈 보존)
+if (Test-Path -LiteralPath $bmsPath) {
     Write-Host "`nUpdating '$bmsPath'..."
-    $backupPath = "$bmsPath.speed_tags.bak"
-    Copy-Item -Path $bmsPath -Destination $backupPath -Force
-    Write-Host "Backup created: $backupPath"
-
-    $lines = [System.IO.File]::ReadAllLines($bmsPath, [System.Text.Encoding]::UTF8)
+    $bytes = [System.IO.File]::ReadAllBytes($bmsPath)
+    $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+    $encoding = New-Object System.Text.UTF8Encoding($hasBom, $true)
+    $offset = if ($hasBom) { 3 } else { 0 }
+    $rawText = $encoding.GetString($bytes, $offset, $bytes.Length - $offset)
+    $newline = if ($rawText.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = $rawText -split '\r?\n'
 
     $headerLines = New-Object System.Collections.Generic.List[string]
     $existingWavLines = New-Object System.Collections.Generic.List[string]
@@ -98,13 +117,13 @@ if (Test-Path $bmsPath) {
     $registeredPaths = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
 
     $inWavSection = $false
-    $pastWavSection = $false
 
     foreach ($line in $lines) {
-        if ($line -match "^#WAV([0-9A-Za-z]{3})\s+(.+)$") {
+        if ($line -match "^#WAV([0-9A-Za-z]{3})([ \t]+)(.+)$") {
             $inWavSection = $true
             $key = $Matches[1]
-            $val = $Matches[2].Trim()
+            $sep = $Matches[2]
+            $val = $Matches[3].Trim()
 
             $num = ConvertFrom-Base36 $key
             if ($num -gt $maxBase36Num) { $maxBase36Num = $num }
@@ -119,15 +138,12 @@ if (Test-Path $bmsPath) {
             }
 
             $registeredPaths.Add($val) | Out-Null
-            $existingWavLines.Add("#WAV$key $val")
+            $existingWavLines.Add("#WAV$key$sep$val")
         }
         else {
             if ($inWavSection) {
-                # WAV 섹션 이후
-                $pastWavSection = $true
                 $chartLines.Add($line)
             } else {
-                # WAV 섹션 이전 (TITLE, BPM 등)
                 $headerLines.Add($line)
             }
         }
@@ -141,12 +157,17 @@ if (Test-Path $bmsPath) {
 
     # 씬 번호 순서대로 스피드 2, 스피드 3 파일들 수집
     for ($speed = 2; $speed -le 3; $speed++) {
-        $speedFolders = Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -match "^(\d+)번 씬 스피드${speed} wav폴더$" } | Sort-Object { [int]($_.Name -replace '\D') }
+        $speedFolders = @(Get-ChildItem -LiteralPath $Root -Directory |
+            Where-Object { $_.Name -match "^(\d+)번 씬 스피드${speed} wav폴더$" } |
+            Sort-Object { if ($_.Name -match '^(\d+)') { [int]$Matches[1] } else { 0 } })
 
         foreach ($folder in $speedFolders) {
-            $wavFiles = Get-ChildItem -Path $folder.FullName -Filter "*.wav" | Sort-Object Name
+            $wavFiles = @(Get-ChildItem -LiteralPath $folder.FullName -Filter "*.wav" -File | Sort-Object Name)
             foreach ($wf in $wavFiles) {
                 $relPath = Join-Path $folder.Name $wf.Name
+                if ($fileMapOldToNew.ContainsKey($relPath)) {
+                    $relPath = $fileMapOldToNew[$relPath]
+                }
                 # 아직 등록되지 않은 파일만 추가 (보스 등장 등 스피드1과 동일한 중복 파일 방지)
                 if (-not $registeredPaths.Contains($relPath)) {
                     $keyStr = ConvertTo-Base36 $currentKeyNum
@@ -160,17 +181,33 @@ if (Test-Path $bmsPath) {
 
     Write-Host "New #WAV entries created for Speed 2 & 3: $($newWavLines.Count)"
 
-    # 파일 전체 조립
-    $finalLines = New-Object System.Collections.Generic.List[string]
-    $finalLines.AddRange($headerLines)
-    $finalLines.AddRange($existingWavLines)
-    $finalLines.AddRange($newWavLines)
-    $finalLines.AddRange($chartLines)
+    if ($PSCmdlet.ShouldProcess($bmsPath, "Write $($existingWavLines.Count + $newWavLines.Count) #WAV entries")) {
+        $backupPath = "$bmsPath.speed_tags.bak"
+        Copy-Item -LiteralPath $bmsPath -Destination $backupPath -Force
+        Write-Host "Backup created: $backupPath"
 
-    [System.IO.File]::WriteAllLines($bmsPath, $finalLines, [System.Text.Encoding]::UTF8)
+        # 파일 전체 조립
+        $finalLines = New-Object System.Collections.Generic.List[string]
+        $finalLines.AddRange($headerLines)
+        $finalLines.AddRange($existingWavLines)
+        $finalLines.AddRange($newWavLines)
+        $finalLines.AddRange($chartLines)
 
-    Write-Host "`nTotal #WAV definitions in BMS: $($existingWavLines.Count + $newWavLines.Count)"
-    Write-Host "BMS file updated successfully!"
+        $updatedText = [string]::Join($newline, $finalLines)
+        $body = $encoding.GetBytes($updatedText)
+        $preamble = $encoding.GetPreamble()
+        if ($preamble.Length -gt 0) {
+            $out = New-Object byte[] ($preamble.Length + $body.Length)
+            [System.Buffer]::BlockCopy($preamble, 0, $out, 0, $preamble.Length)
+            [System.Buffer]::BlockCopy($body, 0, $out, $preamble.Length, $body.Length)
+        } else {
+            $out = $body
+        }
+        [System.IO.File]::WriteAllBytes($bmsPath, $out)
+
+        Write-Host "`nTotal #WAV definitions in BMS: $($existingWavLines.Count + $newWavLines.Count)"
+        Write-Host "BMS file updated successfully!"
+    }
 }
 
 Write-Host "`nALL DONE!"

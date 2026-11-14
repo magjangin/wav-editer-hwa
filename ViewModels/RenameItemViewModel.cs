@@ -18,7 +18,7 @@ public partial class RenameItemViewModel : ObservableObject
     private string _originalName;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsModified), nameof(ArrowColor), nameof(NewNameColor))]
+    [NotifyPropertyChangedFor(nameof(IsModified), nameof(ArrowColor), nameof(NewNameColor), nameof(NewNameTooltip))]
     private string _newName;
 
     [ObservableProperty]
@@ -28,9 +28,11 @@ public partial class RenameItemViewModel : ObservableObject
     private bool _isSelected = true;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasError), nameof(NewNameColor), nameof(NewNameTooltip))]
     private RenameStatus _status = RenameStatus.Pending;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NewNameTooltip))]
     private string? _statusMessage;
 
     [ObservableProperty]
@@ -42,6 +44,8 @@ public partial class RenameItemViewModel : ObservableObject
 
     public bool IsModified => !string.Equals(OriginalName, NewName, StringComparison.Ordinal);
 
+    public bool HasError => Status == RenameStatus.Error;
+
     public string Extension => _extension;
 
     public bool IsWavFile => !IsDirectory && _extension == ".wav";
@@ -52,13 +56,15 @@ public partial class RenameItemViewModel : ObservableObject
 
     public string ArrowColor => IsModified ? "#a78bfa" : "#333333";
 
+    public string NewNameTooltip => string.IsNullOrEmpty(StatusMessage) ? NewName : $"{NewName} — {StatusMessage}";
+
     public string NewNameColor
     {
         get
         {
-            if (HasConflict) return "#f87171"; // Red
-            if (IsModified) return "#38bdf8";  // Cyan / Sky
-            return "#777777";                 // Dim Gray
+            if (HasConflict || HasError) return "#f87171"; // Red
+            if (IsModified) return "#38bdf8";              // Cyan / Sky
+            return "#777777";                             // Dim Gray
         }
     }
 
@@ -96,7 +102,10 @@ public partial class RenameItemViewModel : ObservableObject
     public void MarkMovedTo(string newPath)
     {
         FullPath = newPath;
+        DirectoryPath = Path.GetDirectoryName(newPath) ?? DirectoryPath;
         OriginalName = Path.GetFileName(newPath);
         NewName = OriginalName;
+        Status = RenameStatus.Renamed;
+        StatusMessage = null;
     }
 }

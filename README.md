@@ -13,7 +13,8 @@ Windows PowerToys의 **PowerRename** 기능을 Avalonia UI (C# / .NET 10 / MVVM)
 
 2. **🎼 BMS 차트 동기화 (킬러 기능)**
    - WAV 파일이 있는 폴더나 상위 폴더의 `*.bms` 파일(예: `hwa2.bms`)을 **자동 감지 및 연동**
-   - WAV 파일 이름을 변경할 때 BMS 내부의 `#WAVxxx <경로\파일명>`도 **실시간 자동 치환 및 갱신**
+   - WAV 파일·씬 폴더 이름을 변경할 때 BMS 내부의 `#WAVxxx <경로\파일명>`도 **실시간 자동 치환 및 갱신**
+   - 다중 씬 폴더의 동명 파일 오매칭 방지(상대경로 우선 + 디스크 실존 검사)
    - 원본 BMS 파일 자동 백업 (`*.bms.bak`) 생성 및 실행 취소(Undo) 시 BMS까지 원복
    - 원본 인코딩(UTF-8 BOM 유무, CP949)·줄바꿈(LF/CRLF) 그대로 보존
 
@@ -21,11 +22,12 @@ Windows PowerToys의 **PowerRename** 기능을 Avalonia UI (C# / .NET 10 / MVVM)
    - 정규식 그룹 캡처 (`$1`, `$2`), 일반 치환, 대/소문자 구분
    - 적용 범위: 파일 이름 + 확장명 / 파일 이름만 / 확장명만
    - 텍스트 서식 변환 (`aa`, `AA`, `Aa`, `Aa Aa`, `⟲`)
+   - OS 금지 파일명 문자 및 공백 사전 검증, 포함 옵션(`WAV만`/`파일`/`폴더`/`하위 폴더`) 토글 실시간 동기화
 
 4. **실시간 미리보기 & 안전망**
    - 변경될 새 파일명 실시간 확인
-   - 동일 폴더 내 이름 충돌(Conflict) 사전 감지
-   - NTFS 2-Pass Move로 Windows 대소문자 리네임 충돌 방지
+   - 동일 폴더 내 이름 충돌 및 미수정 파일과의 덮어쓰기 충돌(Conflict) 사전 감지
+   - NTFS 2-Pass Move 및 2단계 일괄 이동(`MoveBatch`)으로 대소문자·연쇄(`a→b, b→c`)·맞교환(`a↔b`) 리네임 지원
    - 작업 실행 취소 (Undo)
 
 ---
@@ -38,7 +40,7 @@ Antigravity 및 Claude Code와 같은 AI 코딩 어시스턴트가 직접 호출
 - **제공 도구 (Tools):**
   1. `scan_wav_assets`: 대상 폴더 내 모든 WAV 파일 및 연동된 BMS 차트(#WAV 정의)의 누락/매칭 상태 스캔 및 진단
   2. `preview_rename`: 실제 파일 변경 없이 정규식/문자열 치환 및 대소문자 변환 결과를 안전하게 시뮬레이션
-  3. `apply_rename`: 디스크 파일 일괄 리네임 + BMS 차트 파일(#WAV) 내부 정의 일괄 자동 동기화
+  3. `apply_rename`: 디스크 파일 일괄 리네임(연쇄/교환 지원) + BMS 차트 파일(#WAV) 내부 정의 일괄 자동 동기화
   4. `sync_bms_chart`: BMS 파일의 #WAV 정의를 제공된 치환 맵에 따라 직접 갱신
 
 ---
@@ -49,7 +51,10 @@ Antigravity 및 Claude Code와 같은 AI 코딩 어시스턴트가 직접 호출
 # 디버그 실행
 dotnet run
 
-# 자체 무결성 테스트 (엔진 + 파일 이동 + BMS 동기화 + GUI 흐름, 31개)
+# 경고 없는 엄격 빌드
+dotnet build -warnaserror
+
+# 자체 무결성 테스트 (엔진 + 일괄 이동 + BMS 동기화 + GUI 흐름 + MCP E2E, 84개)
 dotnet run -- --test
 
 # 대량 WAV 성능 측정 (기본 2,000개)
