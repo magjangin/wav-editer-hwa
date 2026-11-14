@@ -57,6 +57,14 @@ function Transform-WavName($name, $targetSpeed) {
     return $name
 }
 
+function Test-SpeedIndependentWav($name) {
+    if ($name -match '^([0-9A-Za-z]{6})_') {
+        $uid = $Matches[1]
+        return $uid.StartsWith("0004") -or $uid.Substring(2, 2) -eq "01"
+    }
+    return $false
+}
+
 # 1. 씬 폴더 검색
 $sceneDirs = @(Get-ChildItem -LiteralPath $Root -Directory |
     Where-Object { $_.Name -match '^(\d+)번 씬 wav폴더$' } |
@@ -101,6 +109,14 @@ foreach ($dir in $sceneDirs) {
 
     foreach ($file in $sourceFiles) {
         $origName = $file.Name
+
+        # 속도가 없는 파일(보스 등장·퇴장·원거리 액션 xx=01, 씬 전환 0004xx)은 스피드1 폴더에만 둔다.
+        # 스피드2·3 폴더로 같은 이름을 복사하면 apply_speed_tags_and_bms.ps1이 폴더가 다른 경로로 보고
+        # 새 #WAV 키로 또 등록해, 키음 팔레트에 같은 보스 동작이 두 세트로 잡혔다(2026-11-14).
+        if (Test-SpeedIndependentWav $origName) {
+            $totalProcessed++
+            continue
+        }
 
         $s2Name = Transform-WavName $origName 2
         $s2Dest = Join-Path $speed2Dir $s2Name

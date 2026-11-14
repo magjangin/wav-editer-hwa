@@ -67,15 +67,18 @@
    - `MainWindow.axaml`의 `ComboBox.SelectedIndex`가 `RenameScope` enum에 직접 바인딩되던 문제 → `SelectedScopeIndex` int 래퍼 프로퍼티 도입.
    - 다중 씬 폴더의 동명 WAV 중 한 씬만 바꿨을 때 다른 씬의 BMS 행까지 파일명 폴백으로 덮어쓰던 문제 → 디스크 실존 여부 검사 및 모호한 파일명 제외로 차단.
    - `apply_speed_tags_and_bms.ps1`의 `-replace '\D'` 씬 정렬 버그와 `ReadAllLines`/`WriteAllLines`의 BOM·LF 손상 → 정규식 수치 정렬 및 바이트 기반 BOM·줄바꿈 보존으로 해결.
+6. **속도 없는 키음이 두 세트로 잡히던 버그 (2026-11-14):** `convert_star_trace_speeds.ps1`이 보스 등장·퇴장·원거리 액션(uid xx=01)과 씬 전환(0004xx)까지 스피드2·3 폴더로 같은 이름으로 복사했고, `apply_speed_tags_and_bms.ps1`은 경로(폴더)가 다르다는 이유로 그 파일을 새 `#WAV` 키로 또 등록했다 → BMS 에디터 키음 팔레트에 같은 보스 동작이 `#0BA`/`#0SV`처럼 두 세트로 보이고, 채보에서 원거리2 시작은 스피드1 키·끝은 스피드2 키로 섞여 찍혔다(모드는 파일명 uid로 읽어 동작은 같았지만 차트 작성·검토가 꼬임). 복사 단계에서 속도 없는 파일을 건너뛰고, 등록 단계는 파일명까지 비교하며, 기존 차트는 `Remove-SpeedDuplicateWavs.ps1`로 정리했다(ADDICTED·Looks Can Kill·Star Trace·With 각 132행). 스피드2·3 폴더에 남은 복사본 WAV 파일은 지우지 않았다.
 
 ## 6. 부가 자동화 스크립트 (Scripts)
-- **공통 규칙:** `scripts/` 및 `scripts/history/`의 모든 `.ps1` 파일(14개)은 UTF-8 BOM으로 저장됨.
+- **공통 규칙:** `scripts/` 및 `scripts/history/`의 모든 `.ps1` 파일(15개)은 UTF-8 BOM으로 저장됨.
 - `scripts/Rename-DtSuffix.ps1` (**범용, 새 dt 변경은 이것을 사용**):
   - 씬 폴더(`-FolderPattern`)의 `_dt<From>.wav` → `_dt<To>.wav` 일괄 리네임 + BMS `#WAV` 동기화. `-NamePattern`으로 UID 한정, `-WhatIf`로 사전 점검(대상 파일·BMS 행 수만 출력).
   - 대상 이름 충돌 시 아무것도 바꾸기 전에 중단, BMS는 BOM·줄바꿈 보존(`Buffer.BlockCopy`), `<bms>.<BackupTag>.bak` 백업.
   - 예: `.\scripts\Rename-DtSuffix.ps1 -Root "H:\muse dash hwa\hwa\Star Trace" -FolderPattern '스피드3 wav폴더$' -From 1.16 -To 1.18 -WhatIf`
 - `scripts/apply_speed_tags_and_bms.ps1`:
   - `-Root`, `-BmsName`, `-WhatIf` 지원. Muse Dash 커스텀 차트용 씬 폴더(예: `Star Trace`)의 WAV 키음을 속도 1~3 태그로 정리하고 `*.bms` `#WAV` 정의를 스피드 2·3까지 확장 (원본 BOM·줄바꿈·구분 공백 유지).
+- `scripts/Remove-SpeedDuplicateWavs.ps1`:
+  - `-Root`(곡 폴더 또는 상위 폴더, 하위 `*.bms` 전부), `-WhatIf` 지원. 파일명이 같은 속도 없는 키음(xx=01, 0004xx) `#WAV` 중 처음 등록된 키만 남기고 채보 데이터 줄(02·03·08·09 채널 제외)의 키를 그 키로 바꾼다. BOM·줄바꿈 보존, `<bms>.speed_dedupe.bak` 백업, WAV 파일은 건드리지 않음.
 - `scripts/convert_star_trace_speeds.ps1`:
   - `-Root`, `-BmsName`, `-WhatIf` 지원. 씬 폴더를 속도 1~3으로 분할·복제하며 최종 실기 검증된 dt 규격(`1.48/1.28/1.18`, `1.47/1.26/1.10`, `0.8/0.76/0.6`)과 BMS BOM 보존 적용.
 - `scripts/history/` — **이미 실행 완료된 일회성 기록** (재실행 금지, 값의 근거 보존용):

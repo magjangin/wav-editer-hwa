@@ -115,6 +115,7 @@ if (Test-Path -LiteralPath $bmsPath) {
 
     $maxBase36Num = 0
     $registeredPaths = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    $registeredFileNames = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
 
     $inWavSection = $false
 
@@ -138,6 +139,7 @@ if (Test-Path -LiteralPath $bmsPath) {
             }
 
             $registeredPaths.Add($val) | Out-Null
+            $registeredFileNames.Add([System.IO.Path]::GetFileName($val)) | Out-Null
             $existingWavLines.Add("#WAV$key$sep$val")
         }
         else {
@@ -168,11 +170,13 @@ if (Test-Path -LiteralPath $bmsPath) {
                 if ($fileMapOldToNew.ContainsKey($relPath)) {
                     $relPath = $fileMapOldToNew[$relPath]
                 }
-                # 아직 등록되지 않은 파일만 추가 (보스 등장 등 스피드1과 동일한 중복 파일 방지)
-                if (-not $registeredPaths.Contains($relPath)) {
+                # 아직 등록되지 않은 파일만 추가 (보스 등장·원거리 액션 등 스피드1과 동일한 중복 파일 방지)
+                $fileName = [System.IO.Path]::GetFileName($relPath)
+                if (-not $registeredPaths.Contains($relPath) -and -not $registeredFileNames.Contains($fileName)) {
                     $keyStr = ConvertTo-Base36 $currentKeyNum
                     $newWavLines.Add("#WAV$keyStr $relPath")
                     $registeredPaths.Add($relPath) | Out-Null
+                    $registeredFileNames.Add($fileName) | Out-Null
                     $currentKeyNum++
                 }
             }
