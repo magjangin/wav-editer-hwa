@@ -462,6 +462,10 @@ public partial class MainViewModel : ViewModelBase
 
         CheckConflicts();
         UpdateCounts();
+
+        // 필터는 새 이름도 검사하므로, 필터가 켜진 상태에서 치환 규칙이 바뀌면 표시 목록도 다시 걸러야 한다.
+        if (!string.IsNullOrWhiteSpace(FilterText) && !_isBatchUpdating)
+            FilterList();
     }
 
     private sealed class DirectoryAndNameComparer : IEqualityComparer<(string Dir, string Name)>

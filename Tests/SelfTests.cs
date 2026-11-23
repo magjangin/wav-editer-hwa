@@ -39,6 +39,7 @@ public static class SelfTests
         WithTempDir(TestGuiApplySyncsBmsAndUndoRestores);
         WithTempDir(TestDeselectClearsConflict);
         WithTempDir(TestConflictWithUnmodifiedItem);
+        WithTempDir(TestFilterFollowsNewNames);
         WithTempDir(TestSelectAllAfterPartialDeselect);
         WithTempDir(TestInclusionTogglesLiveSync);
         WithTempDir(TestRemoveNonWavAndClearAll);
@@ -294,6 +295,22 @@ public static class SelfTests
         AssertTrue(!a2.HasConflict, "Unmodified target file itself is not marked as conflict");
     }
 
+    private static void TestFilterFollowsNewNames(string root)
+    {
+        File.WriteAllBytes(Path.Combine(root, "kick.wav"), [1]);
+        File.WriteAllBytes(Path.Combine(root, "snare.wav"), [2]);
+
+        var vm = new MainViewModel();
+        vm.AddPaths([root]);
+        vm.FilterText = "zzz";
+        AssertEqual(vm.DisplayItems.Count.ToString(), "0", "Filter hides non-matching items");
+
+        // 필터는 새 이름도 검사하므로 치환 규칙이 바뀌면 표시 목록도 따라 바뀌어야 한다.
+        vm.SearchText = "kick";
+        vm.ReplaceText = "zzz";
+        AssertEqual(vm.DisplayItems.Count.ToString(), "1", "Filter re-applies when replace rule changes new names");
+    }
+
     private static void TestSelectAllAfterPartialDeselect(string root)
     {
         File.WriteAllBytes(Path.Combine(root, "k1.wav"), [1]);
@@ -426,6 +443,23 @@ public static class SelfTests
         AssertEqual(previewJson["applied_to_disk"]!.GetValue<bool>().ToString(), "False", "MCP preview_rename does not modify disk");
         AssertEqual(previewJson["modified_count"]!.GetValue<int>().ToString(), "2", "MCP preview_rename simulates 2 renames");
         AssertTrue(File.Exists(Path.Combine(s1, "kick_dt1.48.wav")), "Original file remains after MCP preview");
+
+        // 잘못된 method 타입(숫자)이 와도 서버가 죽지 않고 이어서 응답해야 한다.
+        var badMethod = CallMcp(
+            new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 90, ["method"] = 123 },
+            new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 91, ["method"] = "ping" });
+        AssertTrue(badMethod.Any(r => r["id"]?.GetValue<int>() == 91), "MCP survives non-string method and answers next request");
+
+        // 이름이 바뀌지 않는 기존 파일 자리로 가는 변경은 미리보기 단계에서 충돌로 보고된다.
+        File.WriteAllBytes(Path.Combine(s1, "kick_dt1.99.wav"), [9]);
+        var conflictJson = ParseToolText(CallMcp(ToolCall(40, "preview_rename", new JsonObject
+        {
+            ["directory"] = s1,
+            ["search_text"] = "_dt1.48",
+            ["replace_text"] = "_dt1.99"
+        })).Single());
+        AssertEqual(conflictJson["conflict_count"]?.GetValue<int>().ToString() ?? "0", "1", "MCP preview reports conflict with existing unmoved file");
+        File.Delete(Path.Combine(s1, "kick_dt1.99.wav"));
 
         var applyJson = ParseToolText(CallMcp(ToolCall(5, "apply_rename", new JsonObject
         {

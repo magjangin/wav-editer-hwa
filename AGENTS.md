@@ -20,6 +20,13 @@
   - **적용/실행 취소의 디스크 I/O는 `Task.Run`** 에서 `FileRenamer.MoveBatch`로 수행하고, 항목 상태 갱신은 UI 스레드로 돌아와서 한다.
   - MCP `apply_rename`도 GUI와 같은 규칙: 같은 대상으로 모이는 변경은 충돌로 건너뛰고 `MoveBatch`로 연쇄/교환 이동을 수행하며, 실패한 항목은 BMS에 반영하지 않는다. 불리언 인자는 `"true"` 문자열도 허용, 출력 JSON은 한글을 이스케이프하지 않는다.
 
+- **코드에 드러나지 않는 설계 결정 (2026-11-23 감사):**
+  - **MCP 요청은 `Task.Run`으로 읽기 루프에서 분리하되, 도구 실행은 `_toolLock`으로 직렬화한다.** 도구 핸들러는 동기 디스크 I/O라 읽기 루프에서 직접 돌리면 긴 `apply_rename` 중 `notifications/cancelled`를 읽지 못한다. 반대로 락 없이 병렬 실행하면 같은 폴더를 두 호출이 동시에 바꿀 수 있다. 처리되지 않은 예외는 미관찰 Task로 서버를 죽이지 않도록 로그만 남긴다. `method`가 문자열이 아니어도 `GetValue<string>()`이 던지지 않게 `TryGetValue`로 읽는다.
+  - **MCP 충돌 규칙을 GUI(`CheckConflicts`의 `stationarySet`)와 일치:** 같은 대상으로 모이는 변경뿐 아니라, 대상 자리에 이름이 안 바뀌는 기존 파일이 있어도 충돌로 보고한다(미리보기 단계에서 확인 가능). 이동 예정 원본(`movingSources`)이 비켜주는 자리는 충돌이 아니다(연쇄·맞교환·대소문자 전용 변경).
+  - **`RefreshPreview`는 필터가 켜져 있으면 `FilterList`도 다시 호출한다.** 필터가 `NewName`까지 검사하므로 치환 규칙이 바뀌면 표시 목록이 낡는다(예전엔 필터를 다시 입력해야 갱신).
+  - **BMS 저장은 `.tmp`에 쓰고 `File.Move(overwrite)`로 교체:** 쓰는 도중 중단돼도 원본 BMS가 반쯤 잘린 채 남지 않는다. `.bak`은 그 전에 먼저 쓴다.
+  - 같은 BMS를 연속으로 동기화하면 `.bak`은 **직전 동기화 이전** 상태로 덮어써진다(최초 원본 보존이 아님). 최초 원본이 필요하면 첫 동기화 직후 `.bak`을 따로 복사해 둘 것. GUI 실행 취소는 `.bak`이 아니라 메모리의 원본 바이트를 쓴다.
+
 ## 2. 프로젝트 아키텍처
 - **Framework:** .NET 10.0 (SDK 10.0.401에서 빌드 확인) + Avalonia UI 12.1.3 (Fluent Theme Dark)
 - **MVVM Toolkit:** `CommunityToolkit.Mvvm` 8.4.2
@@ -50,7 +57,7 @@
 ## 4. 빌드 및 테스트 명령
 - **앱 실행:** `dotnet run`
 - **경고 없는 엄격 빌드:** `dotnet build -warnaserror`
-- **무결성 자체 테스트 (엔진·일괄 이동·BMS·GUI 흐름·MCP E2E 84개 검증):** `dotnet run -- --test`
+- **무결성 자체 테스트 (엔진·일괄 이동·BMS·GUI 흐름·MCP E2E 88개 검증):** `dotnet run -- --test`
 - **성능 측정 (기본 2,000개 WAV):** `dotnet run -c Release -- --bench [개수]`
   - 2026-11-14 기준 2,000개: 목록 추가 27ms·알림 3건 / 정규식 키 입력 6회 38ms / 전체 선택 토글 2회 4ms·알림 4건 (최초 리팩토링 전: 433ms·알림 200만 건 / 66ms / 520ms).
 - **릴리즈 배포(Publish):** `dotnet publish -c Release -o Publish`
@@ -67,7 +74,8 @@
    - `MainWindow.axaml`의 `ComboBox.SelectedIndex`가 `RenameScope` enum에 직접 바인딩되던 문제 → `SelectedScopeIndex` int 래퍼 프로퍼티 도입.
    - 다중 씬 폴더의 동명 WAV 중 한 씬만 바꿨을 때 다른 씬의 BMS 행까지 파일명 폴백으로 덮어쓰던 문제 → 디스크 실존 여부 검사 및 모호한 파일명 제외로 차단.
    - `apply_speed_tags_and_bms.ps1`의 `-replace '\D'` 씬 정렬 버그와 `ReadAllLines`/`WriteAllLines`의 BOM·LF 손상 → 정규식 수치 정렬 및 바이트 기반 BOM·줄바꿈 보존으로 해결.
-6. **속도 없는 키음이 두 세트로 잡히던 버그 (2026-11-14):** `convert_star_trace_speeds.ps1`이 보스 등장·퇴장·원거리 액션(uid xx=01)과 씬 전환(0004xx)까지 스피드2·3 폴더로 같은 이름으로 복사했고, `apply_speed_tags_and_bms.ps1`은 경로(폴더)가 다르다는 이유로 그 파일을 새 `#WAV` 키로 또 등록했다 → BMS 에디터 키음 팔레트에 같은 보스 동작이 `#0BA`/`#0SV`처럼 두 세트로 보이고, 채보에서 원거리2 시작은 스피드1 키·끝은 스피드2 키로 섞여 찍혔다(모드는 파일명 uid로 읽어 동작은 같았지만 차트 작성·검토가 꼬임). 복사 단계에서 속도 없는 파일을 건너뛰고, 등록 단계는 파일명까지 비교하며, 기존 차트는 `Remove-SpeedDuplicateWavs.ps1`로 정리했다(ADDICTED·Looks Can Kill·Star Trace·With 각 132행). 스피드2·3 폴더에 남은 복사본 WAV 528개(곡당 132개, 전부 스피드1에 같은 파일이 있고 BMS가 참조하지 않음)는 2026-11-14에 휴지통으로 보냈다.
+6. **(2026-11-23 감사 결과) 검토했으나 바꾸지 않은 것:** `DetectBmsFile`은 폴더에 `.bms`가 여럿이면(`hwa.bms`/`hwa2.bms`) 파일 시스템 순서상 첫 번째를 고른다 — 자동 선택이 틀리면 GUI의 BMS 선택 버튼이나 MCP `bms_path`로 지정할 것. `Directory.Exists`를 경로마다 호출하는 비용은 2,000개에서도 무시할 수준(벤치 27~31ms)이라 캐시하지 않았다. `MoveBatch`의 깊이 웨이브는 "전달 순서가 깊이 내림차순"이라는 전제에 의존한다(GUI·Undo가 이를 보장).
+7. **속도 없는 키음이 두 세트로 잡히던 버그 (2026-11-14):** `convert_star_trace_speeds.ps1`이 보스 등장·퇴장·원거리 액션(uid xx=01)과 씬 전환(0004xx)까지 스피드2·3 폴더로 같은 이름으로 복사했고, `apply_speed_tags_and_bms.ps1`은 경로(폴더)가 다르다는 이유로 그 파일을 새 `#WAV` 키로 또 등록했다 → BMS 에디터 키음 팔레트에 같은 보스 동작이 `#0BA`/`#0SV`처럼 두 세트로 보이고, 채보에서 원거리2 시작은 스피드1 키·끝은 스피드2 키로 섞여 찍혔다(모드는 파일명 uid로 읽어 동작은 같았지만 차트 작성·검토가 꼬임). 복사 단계에서 속도 없는 파일을 건너뛰고, 등록 단계는 파일명까지 비교하며, 기존 차트는 `Remove-SpeedDuplicateWavs.ps1`로 정리했다(ADDICTED·Looks Can Kill·Star Trace·With 각 132행). 스피드2·3 폴더에 남은 복사본 WAV 528개(곡당 132개, 전부 스피드1에 같은 파일이 있고 BMS가 참조하지 않음)는 2026-11-14에 휴지통으로 보냈다.
 
 ## 6. 부가 자동화 스크립트 (Scripts)
 - **공통 규칙:** `scripts/` 및 `scripts/history/`의 모든 `.ps1` 파일(15개)은 UTF-8 BOM으로 저장됨.

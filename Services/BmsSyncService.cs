@@ -108,7 +108,11 @@ public static class BmsSyncService
             if (replacedCount > 0)
             {
                 File.WriteAllBytes(bmsFilePath + ".bak", original);
-                File.WriteAllBytes(bmsFilePath, Encode(updated, encoding));
+
+                // 임시 파일에 먼저 쓴 뒤 교체해, 쓰는 도중 중단돼도 BMS가 반쯤 잘린 채 남지 않게 한다.
+                string tempPath = bmsFilePath + ".tmp";
+                File.WriteAllBytes(tempPath, Encode(updated, encoding));
+                File.Move(tempPath, bmsFilePath, overwrite: true);
             }
 
             return replacedCount;
