@@ -76,6 +76,23 @@ public static class SelfTests
         AssertEqual(RenameEngine.Transform("scene.v2", true, new RenameOptions("v2", "v3", Scope: RenameScope.NameOnly), out _),
             "scene.v3", "Directory ignores extension scope");
 
+        // 로캘 무관(터키어 İ 문제 방지) + Windows 예약 이름·끝 점/공백 거부
+        var prevCulture = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("tr-TR");
+            AssertEqual(T("TITLE.wav", new("zzz", "q", Scope: RenameScope.NameOnly, Formatting: TextFormatting.Lowercase)),
+                "title.wav", "Lowercase is culture-invariant (tr-TR)");
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = prevCulture; }
+
+        RenameEngine.Transform("a.wav", false, new RenameOptions("a", "con"), out var errReserved);
+        AssertTrue(errReserved != null, "Reserved device name (con.wav) is rejected");
+        RenameEngine.Transform("a.wav", false, new RenameOptions("a.wav", "a.wav."), out var errDot);
+        AssertTrue(errDot != null, "Trailing dot is rejected");
+        RenameEngine.Transform("a b.wav", false, new RenameOptions("b.wav", " "), out var errSpace);
+        AssertTrue(errSpace != null, "Trailing space is rejected");
+
         // 사용할 수 없는 파일명 문자 및 빈 이름 거부
         foreach (var badChar in new[] { "/", ":", "*" })
         {

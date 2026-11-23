@@ -62,7 +62,19 @@ public static class BmsSyncService
     }
 
     private static string? FirstBmsIn(string dir)
-        => Directory.EnumerateFiles(dir, "*.bms", SearchOption.TopDirectoryOnly).FirstOrDefault();
+    {
+        try
+        {
+            // 이름순으로 고정해 파일 시스템 열거 순서에 따라 결과가 흔들리지 않게 한다.
+            return Directory.EnumerateFiles(dir, "*.bms", FileScanner.Options(false))
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null; // 상위 폴더 접근 불가 등은 "BMS 없음"으로 취급
+        }
+    }
 
     /// <summary>BMS 파일의 #WAV 정의 경로 목록을 읽습니다 (인코딩 자동 감지).</summary>
     public static List<string> ReadWavDefinitions(string bmsFilePath)
@@ -119,6 +131,7 @@ public static class BmsSyncService
         }
         catch (Exception ex)
         {
+            try { File.Delete(bmsFilePath + ".tmp"); } catch { /* 정리 실패는 무시 */ }
             errorMessage = $"BMS 갱신 중 오류: {ex.Message}";
             return 0;
         }

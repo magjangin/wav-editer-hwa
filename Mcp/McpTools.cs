@@ -149,7 +149,7 @@ public static class McpTools
 
     private static string[] FindTargetFiles(string dir, bool onlyWav)
     {
-        var files = Directory.GetFiles(dir, onlyWav ? "*.wav" : "*", SearchOption.AllDirectories);
+        var files = Directory.GetFiles(dir, onlyWav ? "*.wav" : "*", FileScanner.Options(true));
         return onlyWav
             ? files.Where(f => Path.GetExtension(f).Equals(".wav", StringComparison.OrdinalIgnoreCase)).ToArray()
             : files;
