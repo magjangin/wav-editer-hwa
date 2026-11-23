@@ -173,7 +173,8 @@ public sealed class McpServer
 
     private static JsonObject HandleInitialize(JsonObject? @params)
     {
-        string clientVersion = @params?["protocolVersion"]?.GetValue<string>() ?? SupportedProtocolVersions[0];
+        string clientVersion = @params?["protocolVersion"] is JsonValue pv && pv.TryGetValue<string>(out var cv) && cv != null
+            ? cv : SupportedProtocolVersions[0];
         string protocolVersion = Array.IndexOf(SupportedProtocolVersions, clientVersion) >= 0 ? clientVersion : SupportedProtocolVersions[0];
 
         return new JsonObject
@@ -186,7 +187,7 @@ public sealed class McpServer
             ["serverInfo"] = new JsonObject
             {
                 ["name"] = "wav-bms-renamer",
-                ["version"] = "1.0.0"
+                ["version"] = AppInfo.Version
             },
             ["instructions"] = Instructions
         };
@@ -209,7 +210,7 @@ public sealed class McpServer
 
     private async Task<JsonObject> HandleToolsCallAsync(JsonObject? @params, CancellationToken ct)
     {
-        string? name = @params?["name"]?.GetValue<string>();
+        string? name = @params?["name"] is JsonValue nv && nv.TryGetValue<string>(out var n) ? n : null;
         if (string.IsNullOrEmpty(name))
             throw new McpRpcException(-32602, "tools/call: name is required");
 

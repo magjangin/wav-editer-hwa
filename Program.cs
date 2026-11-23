@@ -25,8 +25,21 @@ sealed class Program
                 var server = new McpServer(Console.OpenStandardInput(), Console.OpenStandardOutput(), Console.Error);
                 return server.RunAsync().GetAwaiter().GetResult();
 
+            case "--version":
+                Console.WriteLine(AppInfo.Version);
+                return 0;
+
             default:
-                return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+                try
+                {
+                    return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+                }
+                catch (Exception ex)
+                {
+                    // WinExe는 콘솔이 없어 시작 실패가 조용히 사라진다 → 실행 파일 옆에 기록을 남긴다.
+                    AppInfo.WriteCrashLog(ex);
+                    return 1;
+                }
         }
     }
 

@@ -54,7 +54,7 @@ dotnet run
 # 경고 없는 엄격 빌드
 dotnet build -warnaserror
 
-# 자체 무결성 테스트 (엔진 + 일괄 이동 + BMS 동기화 + GUI 흐름 + MCP E2E, 88개)
+# 자체 무결성 테스트 (엔진 + 일괄 이동 + BMS 동기화 + GUI 흐름 + MCP E2E, 91개)
 dotnet run -- --test
 
 # 대량 WAV 성능 측정 (기본 2,000개)

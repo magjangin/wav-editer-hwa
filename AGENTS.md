@@ -27,6 +27,12 @@
   - **BMS 저장은 `.tmp`에 쓰고 `File.Move(overwrite)`로 교체:** 쓰는 도중 중단돼도 원본 BMS가 반쯤 잘린 채 남지 않는다. `.bak`은 그 전에 먼저 쓴다.
   - 같은 BMS를 연속으로 동기화하면 `.bak`은 **직전 동기화 이전** 상태로 덮어써진다(최초 원본 보존이 아님). 최초 원본이 필요하면 첫 동기화 직후 `.bak`을 따로 복사해 둘 것. GUI 실행 취소는 `.bak`이 아니라 메모리의 원본 바이트를 쓴다.
 
+- **코드에 드러나지 않는 설계 결정 (2026-11-23 v1.1.0 릴리즈):**
+  - **버전 단일 출처는 csproj `<Version>`** → `AppInfo.Version`(어셈블리 InformationalVersion, `+해시` 제거)이 MCP `serverInfo.version`과 `--version`에 쓰인다. 릴리즈 때는 csproj만 올릴 것(예전엔 MCP가 `"1.0.0"` 하드코딩).
+  - **업데이트 내성:** `RollForward=LatestMajor`(런타임이 10.0.0 정확 일치가 아니어도 실행), `global.json`은 SDK `10.0.100` 이상 + `latestMajor` 롤포워드. Avalonia/Toolkit 패키지는 의도적으로 정확한 버전 고정(자동 상향 금지 — UI 회귀 방지).
+  - **GUI 시작 실패는 `crash.log`(exe 옆)에 기록:** WinExe라 콘솔이 없어 예외가 조용히 사라지기 때문.
+  - MCP `initialize`의 `protocolVersion`, `tools/call`의 `name`이 문자열이 아니어도 `GetValue<string>()` 예외(-32603) 대신 각각 기본 버전 협상/-32602로 응답한다.
+
 ## 2. 프로젝트 아키텍처
 - **Framework:** .NET 10.0 (SDK 10.0.401에서 빌드 확인) + Avalonia UI 12.1.3 (Fluent Theme Dark)
 - **MVVM Toolkit:** `CommunityToolkit.Mvvm` 8.4.2
@@ -55,9 +61,9 @@
 - **주의:** MCP 클라이언트가 떠 있으면 `Publish\PowerRenameAvalonia.exe`가 실행 중이라 잠길 수 있다. 재배포(publish)가 파일 잠금으로 실패하면 Claude Code/Antigravity를 닫고 실행하거나, NTFS에서 실행 중인 `PowerRenameAvalonia.exe`(필요 시 잠긴 DLL 포함)를 `.old`로 rename-aside한 뒤 `dotnet publish -c Release -o Publish`를 실행하고 `.old`를 정리할 것(기존 프로세스가 종료되기 전까지 `.old` 삭제는 지연될 수 있음).
 
 ## 4. 빌드 및 테스트 명령
-- **앱 실행:** `dotnet run`
+- **앱 실행:** `dotnet run` (버전 확인: `dotnet run -- --version`)
 - **경고 없는 엄격 빌드:** `dotnet build -warnaserror`
-- **무결성 자체 테스트 (엔진·일괄 이동·BMS·GUI 흐름·MCP E2E 88개 검증):** `dotnet run -- --test`
+- **무결성 자체 테스트 (엔진·일괄 이동·BMS·GUI 흐름·MCP E2E 91개 검증):** `dotnet run -- --test`
 - **성능 측정 (기본 2,000개 WAV):** `dotnet run -c Release -- --bench [개수]`
   - 2026-11-14 기준 2,000개: 목록 추가 27ms·알림 3건 / 정규식 키 입력 6회 38ms / 전체 선택 토글 2회 4ms·알림 4건 (최초 리팩토링 전: 433ms·알림 200만 건 / 66ms / 520ms).
 - **릴리즈 배포(Publish):** `dotnet publish -c Release -o Publish`
