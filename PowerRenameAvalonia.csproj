@@ -4,6 +4,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.1.0</Version>
+    <!-- 런타임이 .NET 10.0.0 정확 일치가 아니어도(더 높은 메이저 포함) 실행되도록 해 런타임 업데이트에 견딘다 -->
+    <RollForward>LatestMajor</RollForward>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>

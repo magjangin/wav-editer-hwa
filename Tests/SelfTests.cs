@@ -427,6 +427,26 @@ public static class SelfTests
         }).Single();
         AssertEqual(initRes["result"]!["serverInfo"]!["name"]!.GetValue<string>(), "wav-bms-renamer", "MCP initialize returns server name");
 
+        AssertEqual(initRes["result"]!["serverInfo"]!["version"]!.GetValue<string>(), AppInfo.Version, "MCP initialize reports assembly version");
+
+        var badInit = CallMcp(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 90,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject { ["protocolVersion"] = 123 }
+        }).Single();
+        AssertEqual((badInit["result"] != null).ToString(), "True", "MCP initialize tolerates non-string protocolVersion");
+
+        var badCall = CallMcp(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 91,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject { ["name"] = 5 }
+        }).Single();
+        AssertEqual(badCall["error"]!["code"]!.GetValue<int>().ToString(), "-32602", "MCP tools/call with non-string name is a params error");
+
         var listRes = CallMcp(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 2, ["method"] = "tools/list" }).Single();
         AssertEqual(listRes["result"]!["tools"]!.AsArray().Count.ToString(), "4", "MCP tools/list returns 4 tools");
 
