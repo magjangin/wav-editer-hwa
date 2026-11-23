@@ -254,11 +254,19 @@ public static class McpTools
         }
 
         // GUI와 동일하게, 같은 대상 경로로 모이는 변경은 충돌로 보고 적용하지 않는다.
+        // 또한 이동 대상 자리에 "이름이 바뀌지 않는" 기존 파일이 있으면 덮어쓰기가 되므로 역시 충돌이다
+        // (GUI의 stationarySet 검사와 같은 규칙. 미리보기에서도 미리 알 수 있게 한다).
+        var movingSources = new HashSet<string>(plans.Select(p => p.OldPath), StringComparer.OrdinalIgnoreCase);
         var conflicts = plans
             .GroupBy(p => p.NewPath, StringComparer.OrdinalIgnoreCase)
             .Where(g => g.Skip(1).Any())
             .SelectMany(g => g)
             .ToHashSet();
+        foreach (var plan in plans)
+        {
+            if (!movingSources.Contains(plan.NewPath) && File.Exists(plan.NewPath))
+                conflicts.Add(plan);
+        }
 
         string? bmsPath = GetString(args, "bms_path");
         if (string.IsNullOrEmpty(bmsPath) || !File.Exists(bmsPath))

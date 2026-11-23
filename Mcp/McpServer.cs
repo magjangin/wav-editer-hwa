@@ -29,6 +29,7 @@ public sealed class McpServer
     private readonly TextWriter _log;
     private readonly IReadOnlyList<McpTool> _tools;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly SemaphoreSlim _toolLock = new(1, 1);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _inflight = new();
 
     public McpServer(Stream input, Stream output, TextWriter log)
@@ -51,8 +52,15 @@ public sealed class McpServer
             if (line == null) break;
             if (string.IsNullOrWhiteSpace(line)) continue;
 
+            // 도구 핸들러는 동기 디스크 I/O라서 읽기 루프에서 직접 돌리면 긴 작업 중 취소 알림조차 못 읽는다.
+            // 스레드 풀로 넘겨 루프를 비우고, 예외가 미관찰 Task로 서버를 죽이지 않도록 감싼다.
+            string captured = line;
             pending.RemoveAll(t => t.IsCompleted);
-            pending.Add(HandleLineAsync(line, ct));
+            pending.Add(Task.Run(async () =>
+            {
+                try { await HandleLineAsync(captured, ct); }
+                catch (Exception ex) { _log.WriteLine($"[mcp] 처리되지 않은 오류: {ex.Message}"); }
+            }, CancellationToken.None));
         }
 
         await Task.WhenAll(pending);
@@ -93,7 +101,8 @@ public sealed class McpServer
     private async Task HandleMessageAsync(JsonObject message, CancellationToken ct)
     {
         var id = message["id"];
-        string? method = message["method"]?.GetValue<string>();
+        // method가 문자열이 아니어도 GetValue가 던지지 않도록 안전하게 읽는다.
+        string? method = message["method"] is JsonValue mv && mv.TryGetValue<string>(out var m) ? m : null;
 
         if (string.IsNullOrEmpty(method))
         {
@@ -209,7 +218,12 @@ public sealed class McpServer
             throw new McpRpcException(-32601, $"Tool not found: {name}");
 
         var arguments = @params?["arguments"] as JsonObject ?? new JsonObject();
-        var (text, isError) = await tool.ExecuteAsync(arguments, ct);
+        // 파일을 바꾸는 도구가 동시에 겹쳐 돌면 같은 폴더를 서로 밟을 수 있어 호출은 순서대로 실행한다.
+        await _toolLock.WaitAsync(ct);
+        (string text, bool isError) result;
+        try { result = await tool.ExecuteAsync(arguments, ct); }
+        finally { _toolLock.Release(); }
+        var (text, isError) = result;
 
         var content = new JsonArray
         {
