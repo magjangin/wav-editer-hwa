@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -39,7 +40,7 @@ public sealed class RenameEngine
 
         try
         {
-            var regexOptions = options.MatchCase ? RegexOptions.None : RegexOptions.IgnoreCase;
+            var regexOptions = RegexOptions.CultureInvariant | (options.MatchCase ? RegexOptions.None : RegexOptions.IgnoreCase);
             return new RenameEngine(options, new Regex(options.SearchText, regexOptions, RegexTimeout), null);
         }
         catch (ArgumentException ex)
@@ -96,10 +97,27 @@ public sealed class RenameEngine
         return result;
     }
 
+    // Windows 예약 장치 이름(확장명이 붙어도 예약): 이런 이름으로 바꾸면 파일이 아닌 장치로 해석된다.
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    };
+
     private static bool IsValidFileName(string name)
-        => !string.IsNullOrWhiteSpace(name)
-           && name is not ("." or "..")
-           && name.IndexOfAny(InvalidFileNameChars) < 0;
+    {
+        if (string.IsNullOrWhiteSpace(name) || name is "." or ".." || name.IndexOfAny(InvalidFileNameChars) >= 0)
+            return false;
+
+        // Windows는 이름 끝의 '.'/공백을 조용히 잘라내 의도와 다른 이름(또는 충돌)이 된다.
+        if (name[^1] is '.' or ' ')
+            return false;
+
+        int dot = name.IndexOf('.');
+        string baseName = (dot < 0 ? name : name[..dot]).TrimEnd(' ');
+        return !ReservedNames.Contains(baseName);
+    }
 
     private string Replace(string target)
     {
@@ -122,7 +140,8 @@ public sealed class RenameEngine
         if (string.IsNullOrEmpty(input) || formatting == TextFormatting.None)
             return input;
 
-        var culture = CultureInfo.CurrentCulture;
+        // 파일 이름 변환은 사용자 로캘(예: 터키어 İ/ı)에 따라 결과가 달라지면 안 되므로 항상 Invariant.
+        var culture = CultureInfo.InvariantCulture;
         return formatting switch
         {
             TextFormatting.Lowercase => input.ToLower(culture),

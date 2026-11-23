@@ -27,11 +27,18 @@
   - **BMS 저장은 `.tmp`에 쓰고 `File.Move(overwrite)`로 교체:** 쓰는 도중 중단돼도 원본 BMS가 반쯤 잘린 채 남지 않는다. `.bak`은 그 전에 먼저 쓴다.
   - 같은 BMS를 연속으로 동기화하면 `.bak`은 **직전 동기화 이전** 상태로 덮어써진다(최초 원본 보존이 아님). 최초 원본이 필요하면 첫 동기화 직후 `.bak`을 따로 복사해 둘 것. GUI 실행 취소는 `.bak`이 아니라 메모리의 원본 바이트를 쓴다.
 
-- **코드에 드러나지 않는 설계 결정 (2026-11-23 v1.1.0 릴리즈):**
+- **코드에 드러나지 않는 설계 결정 (2026-11-23 v1.1.0 릴리즈, 현재 v1.1.1):**
   - **버전 단일 출처는 csproj `<Version>`** → `AppInfo.Version`(어셈블리 InformationalVersion, `+해시` 제거)이 MCP `serverInfo.version`과 `--version`에 쓰인다. 릴리즈 때는 csproj만 올릴 것(예전엔 MCP가 `"1.0.0"` 하드코딩).
   - **업데이트 내성:** `RollForward=LatestMajor`(런타임이 10.0.0 정확 일치가 아니어도 실행), `global.json`은 SDK `10.0.100` 이상 + `latestMajor` 롤포워드. Avalonia/Toolkit 패키지는 의도적으로 정확한 버전 고정(자동 상향 금지 — UI 회귀 방지).
   - **GUI 시작 실패는 `crash.log`(exe 옆)에 기록:** WinExe라 콘솔이 없어 예외가 조용히 사라지기 때문.
   - MCP `initialize`의 `protocolVersion`, `tools/call`의 `name`이 문자열이 아니어도 `GetValue<string>()` 예외(-32603) 대신 각각 기본 버전 협상/-32602로 응답한다.
+
+- **코드에 드러나지 않는 설계 결정 (v1.1.1 정밀 감사):**
+  - **폴더 탐색은 `FileScanner.Options`로 통일(GUI·MCP):** 예전 `SearchOption.AllDirectories`는 접근 불가 하위 폴더 하나에서 예외가 나 탐색 전체(MCP는 도구 전체)가 중단됐다. `IgnoreInaccessible`로 건너뛰되, 기존 동작(숨김·시스템 파일 포함, `AttributesToSkip=0`)은 그대로 둔다. 이 옵션을 기본값으로 바꾸면 숨김 파일이 목록에서 사라진다.
+  - **`DetectBmsFile`은 폴더 안에서 이름순(대소문자 무시) 첫 `.bms`를 고른다**(예전엔 파일 시스템 순서). 접근 불가 상위 폴더는 "BMS 없음"으로 처리. 여러 BMS가 있으면 여전히 GUI 선택 버튼/MCP `bms_path`로 지정할 것.
+  - **서식 변환(`aa`/`AA`/`Aa`)과 정규식은 항상 `InvariantCulture`:** 사용자 로캘(터키어 등)에 따라 파일명이 달라지면 안 된다.
+  - **새 이름 검증 강화:** 끝이 `.`/공백인 이름(Windows가 조용히 잘라냄)과 예약 장치 이름(`CON`, `NUL`, `COM1`…, 확장명이 붙어도)은 미리보기 단계에서 오류로 막는다. 원래 이름이 그대로면 검사하지 않는다.
+  - BMS 저장 실패 시 남은 `.tmp`를 정리한다.
 
 ## 2. 프로젝트 아키텍처
 - **Framework:** .NET 10.0 (SDK 10.0.401에서 빌드 확인) + Avalonia UI 12.1.3 (Fluent Theme Dark)
@@ -39,6 +46,7 @@
 - **핵심 컴포넌트:**
   - `Models/RenameOptions.cs`: 치환 설정 레코드(`RenameOptions`)와 성공한 이동 한 건(`RenamedPath`). GUI·MCP 공용 입력 형식.
   - `Services/RenameEngine.cs`: `RenameEngine.Create(options)`로 규칙을 한 번 컴파일한 뒤 `Transform(name, isDirectory, out error)` 반복 호출. 정규식/문자열 치환, 대소문자 변환, 범위(`Scope`) 계산, 파일명 유효성 검사.
+  - `Services/FileScanner.cs`: GUI·MCP 공용 폴더 탐색 옵션(접근 불가 폴더 건너뜀).
   - `Services/FileRenamer.cs`: 2-Pass Move 및 연쇄/교환·깊이 웨이브 지원 일괄 이동(`Move`, `MoveBatch`, `BatchMoveResult`) 루틴 (GUI 적용·실행 취소·MCP 공용).
   - `Services/BmsSyncService.cs`: 디렉토리 중복 없는 BMS 자동 감지(`DetectBmsFile`), `#WAV` 정의 읽기(`ReadWavDefinitions`), 동기화(`SyncBmsFile(bms, IReadOnlyCollection<RenamedPath>, out error)`), 인코딩 판별.
   - `ViewModels/MainViewModel.cs`: 목록 상태, 포함 옵션 실시간 동기화, 필터링, 실시간 미리보기, 무할당 충돌 감지, `SelectedScopeIndex`/서식 활성 프로퍼티, `MoveBatch` 기반 비동기 적용/실행 취소(Undo) 스택.
@@ -63,7 +71,7 @@
 ## 4. 빌드 및 테스트 명령
 - **앱 실행:** `dotnet run` (버전 확인: `dotnet run -- --version`)
 - **경고 없는 엄격 빌드:** `dotnet build -warnaserror`
-- **무결성 자체 테스트 (엔진·일괄 이동·BMS·GUI 흐름·MCP E2E 91개 검증):** `dotnet run -- --test`
+- **무결성 자체 테스트 (엔진·일괄 이동·BMS·GUI 흐름·MCP E2E 95개 검증):** `dotnet run -- --test`
 - **성능 측정 (기본 2,000개 WAV):** `dotnet run -c Release -- --bench [개수]`
   - 2026-11-14 기준 2,000개: 목록 추가 27ms·알림 3건 / 정규식 키 입력 6회 38ms / 전체 선택 토글 2회 4ms·알림 4건 (최초 리팩토링 전: 433ms·알림 200만 건 / 66ms / 520ms).
 - **릴리즈 배포(Publish):** `dotnet publish -c Release -o Publish`

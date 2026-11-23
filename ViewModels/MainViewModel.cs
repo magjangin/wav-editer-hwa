@@ -279,12 +279,12 @@ public partial class MainViewModel : ViewModelBase
 
         try
         {
-            var searchOption = IncludeSubfolders ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            var scanOptions = FileScanner.Options(IncludeSubfolders);
 
             if (IncludeFiles)
             {
                 var pattern = OnlyWavFiles ? "*.wav" : "*";
-                foreach (var subFile in Directory.EnumerateFiles(dirPath, pattern, searchOption))
+                foreach (var subFile in Directory.EnumerateFiles(dirPath, pattern, scanOptions))
                 {
                     if (ShouldIncludeFile(subFile)) Add(subFile, false);
                 }
@@ -292,7 +292,7 @@ public partial class MainViewModel : ViewModelBase
 
             if (IncludeFolders && IncludeSubfolders)
             {
-                foreach (var subDir in Directory.EnumerateDirectories(dirPath, "*", SearchOption.AllDirectories))
+                foreach (var subDir in Directory.EnumerateDirectories(dirPath, "*", FileScanner.Options(true)))
                 {
                     Add(subDir, true);
                 }
